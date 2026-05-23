@@ -1,0 +1,17 @@
+[package]
+name = "sextant-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sextant"
+path = "src/main.rs"
+
+[dependencies]
+sextant-ui = { path = "../sextant-ui" }
+color-eyre = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

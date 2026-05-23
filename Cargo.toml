@@ -1,6 +1,10 @@
-[package]
-name = "sextant"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-
-[dependencies]
+rust-version = "1.85"
+authors = ["wukong0111"]
+license = "MIT"
