@@ -2,9 +2,18 @@
 
 ## Estado Actual
 
-- `Cargo.toml`: paquete vacío, sin dependencias.
-- `src/main.rs`: `Hello, world!`.
+- `Cargo.toml`: reestructurado como workspace con 5 crates.
+- `src/main.rs`: eliminado; entry point movido a `crates/sextant-cli/src/main.rs`.
 - Especificación completa en `sextant-spec.md` con arquitectura, stack y roadmap.
+
+## Progreso
+
+| Fase | Estado | Commit |
+|------|--------|--------|
+| Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
+| Fase 1 — v0.1 MVP | ⬜ Pendiente | — |
+| Fase 2 — v0.2 | ⬜ Pendiente | — |
+| Fase 3 — v1 | ⬜ Pendiente | — |
 
 ## Principios Directores
 
@@ -21,32 +30,32 @@
 
 ### Tareas
 
-1. **Reestructurar `Cargo.toml` raíz como workspace**:
+1. ✅ **Reestructurar `Cargo.toml` raíz como workspace**:
    ```toml
    [workspace]
    members = ["crates/*"]
    resolver = "3"
    ```
 
-2. **Crear crates vacíos** (placeholders — solo `Cargo.toml` + `lib.rs` vacío):
+2. ✅ **Crear crates vacíos** (placeholders — solo `Cargo.toml` + `lib.rs` vacío):
    - `crates/sextant-core/` — placeholder. Tipos de dominio se añaden en Fase 1 cuando se usan.
    - `crates/sextant-db/` — placeholder para drivers sqlx.
    - `crates/sextant-ui/` — loop de eventos TEA, componentes ratatui base.
    - `crates/sextant-config/` — placeholder para carga de TOML + paths XDG.
    - `crates/sextant-cli/` — entry point (`main.rs`).
 
-3. **`sextant-cli` depende solo de `sextant-ui`**. `sextant-ui` no depende de ningún otro crate interno en Fase 0.
+3. ✅ **`sextant-cli` depende solo de `sextant-ui`**. `sextant-ui` no depende de ningún otro crate interno en Fase 0.
 
-5. **Implementar "loop vacío" TUI**:
+5. ✅ **Implementar "loop vacío" TUI**:
    - `crossterm` para input.
    - `ratatui` para render.
    - Pantalla negra con status line falso (`NOR │ no connection │ q to quit`).
    - Manejo de `Ctrl+Q` para salir limpiamente.
 
-6. **Configurar `tracing` + `color-eyre`** en el binario para logging/errores amigables.
+6. ✅ **Configurar `tracing` + `color-eyre`** en el binario para logging/errores amigables.
 
-### Criterio de éxito
-`cargo run` abre una TUI negra con status line y sale con `Ctrl+Q` sin panic.
+### Criterio de éxito ✅
+`cargo run` abre una TUI negra con status line y sale con `Ctrl+Q` sin panic. Verificado con `screen` + captura de pantalla + exit code 0.
 
 ### Nota sobre testing de TUI
 - **Unitarios**: usar `ratatui::backend::TestBackend` para testear el renderizado sin necesidad de un TTY real.
