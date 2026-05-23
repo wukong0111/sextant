@@ -141,6 +141,8 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - `tokio::spawn` para `ExecuteSql`; resultado vuelve por `mpsc::UnboundedSender<AppMsg>`.
 - Estado global (`AppState`) con modal actual (`Normal | Insert | EditorOpen`).
 
+> **Nota de arquitectura (decisión tomada, Fase 0):** migrar de loop síncrono (`event::poll` + `event::read`) a loop **async híbrido** con `tokio::select!`. Fuentes: `crossterm::event::EventStream` (input), `mpsc` (resultados de query), timers (swap, cursor blink). Renderizar solo cuando `needs_redraw == true` o haya un tick de animación (spinner/cursor). Ver análisis completo en issue/discusión previa.
+
 ### Criterio de éxito v0.1
 - Arrancar, ver lista de conexiones.
 - Conectar a PG/SQLite.
