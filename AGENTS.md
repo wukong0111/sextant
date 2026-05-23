@@ -1,85 +1,162 @@
 # AGENTS.md
 
-Directrices de comportamiento para reducir errores comunes de codificación con LLMs. Se pueden fusionar con instrucciones específicas del proyecto según sea necesario.
-
-**Compromiso:** Estas directrices priorizan la cautela sobre la velocidad. Para tareas triviales, usar el criterio propio.
-
-## 1. Pensar Antes de Codificar
-
-**No asumir. No ocultar confusiones. Plantear tradeoffs.**
-
-Antes de implementar:
-- Enunciar las suposiciones explícitamente. Si hay incertidumbre, preguntar.
-- Si existen múltiples interpretaciones, presentarlas — no elegir en silencio.
-- Si existe un enfoque más simple, decirlo. Oponerse cuando sea necesario.
-- Si algo no está claro, parar. Nombrar qué causa confusión. Preguntar.
-
-## 2. Simplicidad Primero
-
-**Código mínimo que resuelva el problema. Nada especulativo.**
-
-- Sin características más allá de lo solicitado.
-- Sin abstracciones para código de un solo uso.
-- Sin "flexibilidad" o "configurabilidad" que no se haya pedido.
-- Sin manejo de errores para escenarios imposibles.
-- Si escribes 200 líneas y podrían ser 50, reescríbelo.
-
-Pregúntate: "¿Un ingeniero senior diría que esto está sobrecomplicado?" Si es sí, simplifica.
-
-## 3. Cambios Quirúrgicos
-
-**Tocar solo lo necesario. Limpiar solo el propio desorden.**
-
-Al editar código existente:
-- No "mejorar" código, comentarios o formato adyacentes.
-- No refactorizar cosas que no están rotas.
-- Respetar el estilo existente, incluso si se haría de otra manera.
-- Si se detecta código muerto no relacionado, mencionarlo — no eliminarlo.
-
-Cuando tus cambios generan huérfanos:
-- Eliminar imports/variables/funciones que TUS cambios dejaron sin usar.
-- No eliminar código muerto preexistente a menos que se solicite.
-
-La prueba: cada línea modificada debe trazarse directamente a la petición del usuario.
-
-## 4. Ejecución Orientada a Objetivos
-
-**Definir criterios de éxito. Iterar hasta verificar.**
-
-Transformar tareas en objetivos verificables:
-- "Añadir validación" → "Escribir tests para entradas inválidas, luego hacerlos pasar"
-- "Arreglar el bug" → "Escribir un test que lo reproduzca, luego hacerlo pasar"
-- "Refactorizar X" → "Asegurar que los tests pasan antes y después"
-
-Para tareas de varios pasos, plantear un plan breve:
-```
-1. [Paso] → verificar: [check]
-2. [Paso] → verificar: [check]
-3. [Paso] → verificar: [check]
-```
-
-Criterios de éxito fuertes permiten iterar de forma independiente. Criterios débiles ("que funcione") requieren clarificación constante.
-
-## 5. Workflow por Fase / Punto de Plan
-
-Cuando el usuario diga "vamos con la Fase X" o "implementa el punto Y":
-
-1. **Leer el plan primero** — Revisar `plan.md` y marcar qué está ✅ y qué ⬜. No asumir que algo está hecho sin verificarlo en el código.
-
-2. **Presentar opciones antes de actuar** — Si la tarea admite múltiples enfoques (librería A vs B, arquitectura X vs Y), presentar las opciones con tradeoffs y esperar decisión del usuario. No elegir en silencio.
-
-3. **Definir el alcance de esta sesión** — Preguntar si quiere la fase completa o solo un subconjunto específico de tareas.
-
-4. **Codificar → Verificar → Commit** — Cada tarea del plan debe:
-   - Compilar sin warnings (`cargo check --workspace`)
-   - Pasar tests existentes (`cargo test --workspace`)
-   - Tener un criterio de éxito verificado antes de declararla "hecha"
-   - Commitearse de forma atómica con mensaje descriptivo
-
-5. **Actualizar el plan inmediatamente** — Marcar la tarea como `[x] ✅` en `plan.md` y añadir el hash del commit en la tabla de progreso. Hacer push del plan junto con el código.
-
-6. **Si algo bloquea, parar y reportar** — No improvisar soluciones a problemas no previstos sin consultar. Documentar el bloqueo en el plan o en un issue.
+Agent-facing reference for the `sextant` project. Read this first before making changes.
 
 ---
 
-**Estas directrices funcionan si:** hay menos cambios innecesarios en los diffs, menos reescrituras por sobrecomplicación, y las preguntas de clarificación vienen antes de la implementación en lugar de después de los errores.
+## Project Overview
+
+`sextant` is a keyboard-driven, terminal-based database client for **PostgreSQL**, **MySQL**, and **SQLite**. It targets developers who want a TablePlus/DataGrip equivalent without leaving the shell. Written in Rust, rendered with `ratatui`, with modal editing inspired by **Helix** (selection-first).
+
+- **Language**: Rust (edition 2024, MSRV 1.85+)
+- **License**: MIT
+- **Author**: wukong0111
+
+### Key Documents
+
+| File | Purpose |
+|------|---------|
+| `sextant-spec.md` | Full product specification (features, UI layout, keybindings, architecture). |
+| `plan.md` | Development roadmap split into phases (Fase 0–3). Check this before starting work. |
+
+---
+
+## Workspace Structure
+
+This is a Cargo workspace. The root `Cargo.toml` defines workspace metadata; all code lives in `crates/`.
+
+```
+sextant/
+├── Cargo.toml                 # workspace definition
+├── plan.md                    # development plan
+├── sextant-spec.md            # product specification
+└── crates/
+    ├── sextant-cli/           # binary entry point (main.rs)
+    ├── sextant-core/          # domain types, traits, shared errors
+    ├── sextant-config/        # TOML config loading, XDG paths, keymaps
+    ├── sextant-db/            # sqlx drivers, query execution, introspection
+    └── sextant-ui/            # ratatui components, event loop, layout
+```
+
+### Crate Responsibilities
+
+- **`sextant-cli`** — The only crate that produces a binary (`sextant`). Minimal: installs `color_eyre`, sets up `tracing`, and calls `sextant_ui::run()`.
+- **`sextant-core`** — Domain primitives (`Driver`, `Connection`, `CellValue`, `QueryResult`, etc.) and the `QueryExecutor` trait. Kept lightweight with few dependencies.
+- **`sextant-config`** — Loads `connections.toml`, `config.toml`, and `keys.toml` from XDG-compliant paths (`~/.config/sextant/`). Validates per-driver required fields.
+- **`sextant-db`** — Implements `QueryExecutor` via `sqlx`. Manages per-connection connection pools. All DB I/O is async (`tokio`).
+- **`sextant-ui`** — Owns the TUI event loop, state machine (`Normal` / `Insert` / `EditorOpen`), and all `ratatui` widgets (tree sidebar, result grid, editor modal, status line).
+
+### Dependency Rules
+
+- `sextant-cli` → `sextant-ui`
+- `sextant-ui` → `sextant-core`
+- `sextant-db` → `sextant-core`
+- `sextant-config` → `sextant-core`
+- Service crates (`sextant-db`, `sextant-config`) must compile and be testable without depending on `sextant-ui`.
+
+---
+
+## Build and Run
+
+```bash
+# Check the entire workspace
+cargo check --workspace
+
+# Run tests
+cargo test --workspace
+
+# Run the TUI application
+cargo run
+```
+
+The binary opens a TUI window. In the current Phase 0 implementation it shows a black screen with a status line. Press `Ctrl+Q` to quit cleanly.
+
+---
+
+## Code Style Guidelines
+
+- **Rust edition 2024**. Use modern syntax where appropriate.
+- **Doc comments** in English (`//!` / `///`).
+- **Prefer minimal, explicit code.** Do not add speculative abstractions, premature generics, or unused error variants.
+- **Surgical changes only.** Do not refactor unrelated code, reformat adjacent lines, or "improve" comments that you didn't touch.
+- **Clean up your own orphans.** If your changes leave imports, variables, or functions unused, remove them. Do not remove pre-existing dead code unless asked.
+- **Every modified line must trace directly to the user's request.**
+
+---
+
+## Testing Instructions
+
+### Unit Tests
+
+- Use `ratatui::backend::TestBackend` to test widget rendering without a real TTY.
+- Example: `crates/sextant-ui/src/lib.rs` contains tests for status-line rendering and `Ctrl+Q` handling.
+- Service crates (`sextant-db`, `sextant-config`) should be unit-testable without spinning up the full TUI.
+
+### Integration Tests
+
+- TUI integration tests can use `screen` to create a pseudo-tty, send `\x11` (`Ctrl+Q`), and verify exit code 0.
+- Database tests should use temporary SQLite files or test containers for PG/MySQL.
+
+### Verification Checklist
+
+Before declaring a task done:
+1. `cargo check --workspace` compiles without warnings.
+2. `cargo test --workspace` passes.
+3. If the change affects the TUI, run `cargo run` and verify the app still starts and quits cleanly.
+
+---
+
+## Security Considerations
+
+- **Passwords never belong in config files.** The `connections.toml` references credentials via `keyring_key`; actual passwords are stored in the OS keyring. For v0.1, a fallback via `SEXTANT_<NAME>_PASSWORD` environment variable is acceptable.
+- **Redact connection strings in logs.** Never log full connection URIs with passwords.
+- **Destructive operations require confirmation.** `DELETE` / `UPDATE` without `WHERE`, and any DDL, must trigger a confirmation modal by default.
+- **Enforce restrictive file permissions on creation:**
+  - `state.db`: `0600`
+  - `.swp` files: `0600`
+  - queries directory: `0700`
+  - `.sql` files: `0600`
+- Query text on disk (saved queries, swap files, history) is **not encrypted**. The threat model assumes local-machine access only.
+
+---
+
+## Development Workflow
+
+When the user says "vamos con la Fase X" or "implementa el punto Y":
+
+1. **Read `plan.md` first.** Check what is marked ✅ vs ⬜. Do not assume a task is done without verifying it in the code.
+2. **Present options before acting.** If multiple approaches exist (library A vs B, architecture X vs Y), present tradeoffs and wait for a decision.
+3. **Define the scope.** Ask whether the user wants the full phase or a specific subset.
+4. **Code → Verify → Commit.** Each plan task must compile, pass tests, have a verifiable success criterion, and be committed atomically with a descriptive message.
+5. **Update the plan immediately.** Mark the task as `[x] ✅` in `plan.md` and add the commit hash to the progress table.
+6. **If blocked, stop and report.** Do not improvise solutions to unplanned problems without consulting. Document blockers in the plan or an issue.
+
+---
+
+## Behavioral Guidelines (for LLM Agents)
+
+1. **Think before coding.** State assumptions explicitly. If something is unclear, ask. If there are multiple interpretations, present them.
+2. **Simplicity first.** Minimum code that solves the problem. No speculative features, no single-use abstractions, no unnecessary configurability.
+3. **Goal-oriented execution.** Transform vague requests into verifiable criteria:
+   - "Add validation" → "Write tests for invalid inputs, then make them pass."
+   - "Fix the bug" → "Write a test that reproduces it, then make it pass."
+   - "Refactor X" → "Ensure tests pass before and after."
+4. **Do not hide confusion.** If unsure, name what is confusing and ask before implementing.
+
+---
+
+## Quick Reference
+
+| Command | Purpose |
+|---------|---------|
+| `cargo check --workspace` | Compile all crates |
+| `cargo test --workspace` | Run all tests |
+| `cargo run` | Start the TUI |
+| `cargo run --bin sextant` | Same as above (explicit binary) |
+
+| File | What to read when... |
+|------|----------------------|
+| `plan.md` | Starting a new phase or task |
+| `sextant-spec.md` | Need product-level context (features, UI, keybindings) |
+| `Cargo.toml` (root) | Workspace metadata |
+| `crates/*/Cargo.toml` | Crate dependencies and features |
