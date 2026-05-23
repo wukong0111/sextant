@@ -28,21 +28,14 @@
    resolver = "3"
    ```
 
-2. **Crear crates vacíos**:
-   - `crates/sextant-core/` — tipos de dominio (`Connection`, `QueryResult`, `Row`, `CellValue`) y traits (`Driver`, `QueryExecutor`).
-   - `crates/sextant-db/` — drivers sqlx (PG, SQLite para v0.1).
+2. **Crear crates vacíos** (placeholders — solo `Cargo.toml` + `lib.rs` vacío):
+   - `crates/sextant-core/` — placeholder. Tipos de dominio se añaden en Fase 1 cuando se usan.
+   - `crates/sextant-db/` — placeholder para drivers sqlx.
    - `crates/sextant-ui/` — loop de eventos TEA, componentes ratatui base.
-   - `crates/sextant-config/` — carga de TOML + paths XDG.
+   - `crates/sextant-config/` — placeholder para carga de TOML + paths XDG.
    - `crates/sextant-cli/` — entry point (`main.rs`).
 
-3. **Definir tipos base en `sextant-core`**:
-   - `enum Driver { Postgres, Mysql, Sqlite }`
-   - `struct Connection { name, driver, host/port/path, database, ssl_mode, keyring_key }`
-   - `enum CellValue { Null, Bool, I64, F64, String, Bytes, Time }`
-   - `struct QueryResult { columns: Vec<Column>, rows: Vec<Row> }`
-   - `trait QueryExecutor: Send + Sync { async fn execute(&self, sql: &str) -> Result<QueryResult>; }`
-
-4. **`sextant-cli` depende solo de `sextant-ui`** (que a su vez depende de `sextant-core`).
+3. **`sextant-cli` depende solo de `sextant-ui`**. `sextant-ui` no depende de ningún otro crate interno en Fase 0.
 
 5. **Implementar "loop vacío" TUI**:
    - `crossterm` para input.
@@ -55,11 +48,26 @@
 ### Criterio de éxito
 `cargo run` abre una TUI negra con status line y sale con `Ctrl+Q` sin panic.
 
+### Nota sobre testing de TUI
+- **Unitarios**: usar `ratatui::backend::TestBackend` para testear el renderizado sin necesidad de un TTY real.
+- **Integración**: usar `screen` para crear un pseudo-tty donde `crossterm` pueda leer eventos; enviar `Ctrl+Q` (`\x11`) y verificar exit code 0.
+
 ---
 
 ## Fase 1 — v0.1 MVP: Conexiones + Editor Básico + Grid Read-Only
 
 **Objetivo**: Conectar a PostgreSQL y SQLite, ejecutar SQL básico, ver resultados en grid, editor modal simple.
+
+### 1.0 Tipos base en `sextant-core`
+
+Definir solo lo que Fase 1 necesita (nada especulativo):
+- `enum Driver { Postgres, Mysql, Sqlite }`
+- `struct Connection { name, driver, host, port, user, database, ssl_mode, path, keyring_key }`
+- `enum CellValue { Null, Bool, I64, F64, String, Bytes }`
+- `struct Column { name, type_name }`
+- `struct QueryResult { columns, rows, rows_affected }`
+- `trait QueryExecutor` con `async fn execute(&self, sql: &str) -> Result<QueryResult, SextantError>`
+- `enum SextantError` usando `thiserror` (se añade como dependencia aquí, no antes).
 
 ### 1.1 Capa de Configuración (`sextant-config`)
 

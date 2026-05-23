@@ -9,7 +9,7 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Terminal,
+    Frame, Terminal,
 };
 use std::io::{self, stdout, Stdout};
 
@@ -46,49 +46,49 @@ impl Default for App {
 }
 
 impl App {
+    /// Render the application into the given frame.
+    pub fn render(&self, frame: &mut Frame) {
+        let area = frame.area();
+
+        // Main empty area
+        let main = Paragraph::new("").block(
+            Block::default()
+                .borders(Borders::NONE)
+                .style(Style::default().bg(Color::Black)),
+        );
+        frame.render_widget(main, area);
+
+        // Status line at the bottom
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .split(area);
+
+        let mode_span = Span::styled(
+            format!(" {} ", self.mode),
+            Style::default()
+                .fg(Color::Black)
+                .bg(if self.mode == Mode::Normal {
+                    Color::Cyan
+                } else {
+                    Color::Yellow
+                }),
+        );
+
+        let conn_span = Span::raw(format!(
+            " {} ",
+            self.connection_name.as_deref().unwrap_or("no connection")
+        ));
+
+        let hint_span = Span::styled(" <C-q> quit ", Style::default().fg(Color::DarkGray));
+
+        let status = Line::from(vec![mode_span, conn_span, hint_span]);
+        let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
+        frame.render_widget(status_bar, chunks[1]);
+    }
+
     fn draw(&self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
-        terminal.draw(|frame| {
-            let area = frame.area();
-
-            // Main empty area
-            let main = Paragraph::new("").block(
-                Block::default()
-                    .borders(Borders::NONE)
-                    .style(Style::default().bg(Color::Black)),
-            );
-            frame.render_widget(main, area);
-
-            // Status line at the bottom
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(0), Constraint::Length(1)])
-                .split(area);
-
-            let mode_span = Span::styled(
-                format!(" {} ", self.mode),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(if self.mode == Mode::Normal {
-                        Color::Cyan
-                    } else {
-                        Color::Yellow
-                    }),
-            );
-
-            let conn_span = Span::raw(format!(
-                " {} ",
-                self.connection_name.as_deref().unwrap_or("no connection")
-            ));
-
-            let hint_span = Span::styled(
-                " <C-q> quit ",
-                Style::default().fg(Color::DarkGray),
-            );
-
-            let status = Line::from(vec![mode_span, conn_span, hint_span]);
-            let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
-            frame.render_widget(status_bar, chunks[1]);
-        })?;
+        terminal.draw(|frame| self.render(frame))?;
         Ok(())
     }
 
@@ -145,4 +145,41 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Re
     stdout().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn renders_status_line() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = App::default();
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let last_row = buf.content.chunks(buf.area.width as usize).last().unwrap();
+        let text: String = last_row.iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("NOR"), "status line should show mode: {text}");
+        assert!(
+            text.contains("no connection"),
+            "status line should show connection: {text}"
+        );
+    }
+
+    #[test]
+    fn ctrl_q_sets_should_quit() {
+        let mut app = App::default();
+        assert!(!app.should_quit);
+
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL,
+        )));
+
+        assert!(app.should_quit);
+    }
 }
