@@ -1,0 +1,23 @@
+# Rust build artifacts
+/target
+
+# Cargo lock (optional for libraries, keep for binaries)
+# /Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Local data / state (sextant runtime files)
+*.db
+*.swp
