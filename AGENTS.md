@@ -1,65 +1,85 @@
 # AGENTS.md
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+Directrices de comportamiento para reducir errores comunes de codificación con LLMs. Se pueden fusionar con instrucciones específicas del proyecto según sea necesario.
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+**Compromiso:** Estas directrices priorizan la cautela sobre la velocidad. Para tareas triviales, usar el criterio propio.
 
-## 1. Think Before Coding
+## 1. Pensar Antes de Codificar
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+**No asumir. No ocultar confusiones. Plantear tradeoffs.**
 
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+Antes de implementar:
+- Enunciar las suposiciones explícitamente. Si hay incertidumbre, preguntar.
+- Si existen múltiples interpretaciones, presentarlas — no elegir en silencio.
+- Si existe un enfoque más simple, decirlo. Oponerse cuando sea necesario.
+- Si algo no está claro, parar. Nombrar qué causa confusión. Preguntar.
 
-## 2. Simplicity First
+## 2. Simplicidad Primero
 
-**Minimum code that solves the problem. Nothing speculative.**
+**Código mínimo que resuelva el problema. Nada especulativo.**
 
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
+- Sin características más allá de lo solicitado.
+- Sin abstracciones para código de un solo uso.
+- Sin "flexibilidad" o "configurabilidad" que no se haya pedido.
+- Sin manejo de errores para escenarios imposibles.
+- Si escribes 200 líneas y podrían ser 50, reescríbelo.
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+Pregúntate: "¿Un ingeniero senior diría que esto está sobrecomplicado?" Si es sí, simplifica.
 
-## 3. Surgical Changes
+## 3. Cambios Quirúrgicos
 
-**Touch only what you must. Clean up only your own mess.**
+**Tocar solo lo necesario. Limpiar solo el propio desorden.**
 
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
+Al editar código existente:
+- No "mejorar" código, comentarios o formato adyacentes.
+- No refactorizar cosas que no están rotas.
+- Respetar el estilo existente, incluso si se haría de otra manera.
+- Si se detecta código muerto no relacionado, mencionarlo — no eliminarlo.
 
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
+Cuando tus cambios generan huérfanos:
+- Eliminar imports/variables/funciones que TUS cambios dejaron sin usar.
+- No eliminar código muerto preexistente a menos que se solicite.
 
-The test: Every changed line should trace directly to the user's request.
+La prueba: cada línea modificada debe trazarse directamente a la petición del usuario.
 
-## 4. Goal-Driven Execution
+## 4. Ejecución Orientada a Objetivos
 
-**Define success criteria. Loop until verified.**
+**Definir criterios de éxito. Iterar hasta verificar.**
 
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
+Transformar tareas en objetivos verificables:
+- "Añadir validación" → "Escribir tests para entradas inválidas, luego hacerlos pasar"
+- "Arreglar el bug" → "Escribir un test que lo reproduzca, luego hacerlo pasar"
+- "Refactorizar X" → "Asegurar que los tests pasan antes y después"
 
-For multi-step tasks, state a brief plan:
+Para tareas de varios pasos, plantear un plan breve:
 ```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
+1. [Paso] → verificar: [check]
+2. [Paso] → verificar: [check]
+3. [Paso] → verificar: [check]
 ```
 
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+Criterios de éxito fuertes permiten iterar de forma independiente. Criterios débiles ("que funcione") requieren clarificación constante.
+
+## 5. Workflow por Fase / Punto de Plan
+
+Cuando el usuario diga "vamos con la Fase X" o "implementa el punto Y":
+
+1. **Leer el plan primero** — Revisar `plan.md` y marcar qué está ✅ y qué ⬜. No asumir que algo está hecho sin verificarlo en el código.
+
+2. **Presentar opciones antes de actuar** — Si la tarea admite múltiples enfoques (librería A vs B, arquitectura X vs Y), presentar las opciones con tradeoffs y esperar decisión del usuario. No elegir en silencio.
+
+3. **Definir el alcance de esta sesión** — Preguntar si quiere la fase completa o solo un subconjunto específico de tareas.
+
+4. **Codificar → Verificar → Commit** — Cada tarea del plan debe:
+   - Compilar sin warnings (`cargo check --workspace`)
+   - Pasar tests existentes (`cargo test --workspace`)
+   - Tener un criterio de éxito verificado antes de declararla "hecha"
+   - Commitearse de forma atómica con mensaje descriptivo
+
+5. **Actualizar el plan inmediatamente** — Marcar la tarea como `[x] ✅` en `plan.md` y añadir el hash del commit en la tabla de progreso. Hacer push del plan junto con el código.
+
+6. **Si algo bloquea, parar y reportar** — No improvisar soluciones a problemas no previstos sin consultar. Documentar el bloqueo en el plan o en un issue.
 
 ---
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+**Estas directrices funcionan si:** hay menos cambios innecesarios en los diffs, menos reescrituras por sobrecomplicación, y las preguntas de clarificación vienen antes de la implementación en lugar de después de los errores.
