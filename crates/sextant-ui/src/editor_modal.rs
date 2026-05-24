@@ -90,6 +90,11 @@ impl EditorModal {
                     {
                         return (super::Mode::Normal, EditorAction::Execute);
                     }
+                    KeyCode::Char('e')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        return (super::Mode::Normal, EditorAction::Execute);
+                    }
                     KeyCode::Esc => {
                         return (super::Mode::Normal, EditorAction::Close);
                     }
@@ -99,6 +104,25 @@ impl EditorModal {
             super::Mode::Insert => {
                 if key.code == KeyCode::Esc && key.modifiers.is_empty() {
                     return (super::Mode::Normal, EditorAction::None);
+                }
+
+                if key.code == KeyCode::Char('s')
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    self.mark_saved();
+                    return (super::Mode::Insert, EditorAction::Save);
+                }
+
+                if key.code == KeyCode::Enter
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    return (super::Mode::Insert, EditorAction::Execute);
+                }
+
+                if key.code == KeyCode::Char('e')
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    return (super::Mode::Insert, EditorAction::Execute);
                 }
 
                 // Forward everything else to the textarea.
@@ -253,5 +277,38 @@ mod tests {
         assert!(editor.is_dirty());
         editor.mark_saved();
         assert!(!editor.is_dirty());
+    }
+
+    #[test]
+    fn insert_mode_ctrl_enter_executes() {
+        let mut editor = EditorModal::new();
+        let (mode, action) = editor.handle_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+            super::super::Mode::Insert,
+        );
+        assert_eq!(mode, super::super::Mode::Insert);
+        assert_eq!(action, EditorAction::Execute);
+    }
+
+    #[test]
+    fn insert_mode_ctrl_s_saves() {
+        let mut editor = EditorModal::new();
+        let (mode, action) = editor.handle_key(
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            super::super::Mode::Insert,
+        );
+        assert_eq!(mode, super::super::Mode::Insert);
+        assert_eq!(action, EditorAction::Save);
+    }
+
+    #[test]
+    fn normal_mode_ctrl_e_executes() {
+        let mut editor = EditorModal::new();
+        let (mode, action) = editor.handle_key(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            super::super::Mode::Normal,
+        );
+        assert_eq!(mode, super::super::Mode::Normal);
+        assert_eq!(action, EditorAction::Execute);
     }
 }

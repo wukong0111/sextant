@@ -160,6 +160,12 @@ impl App {
             self.connection_name.as_deref().unwrap_or("no connection")
         ));
 
+        let error_span = if let Some(ref err) = self.last_error {
+            Span::styled(format!(" ERR: {} │ ", err), Style::default().fg(Color::Red))
+        } else {
+            Span::raw("")
+        };
+
         let stats_span = if let Some(ref result) = self.last_result {
             let rows = result.rows.len();
             let dur = self
@@ -173,7 +179,7 @@ impl App {
 
         let hint = if self.editor_open {
             if self.mode == Mode::Normal {
-                " <i> insert │ <C-Enter> run │ <Esc> close "
+                " <i> insert │ <C-e> run │ <Esc> close "
             } else {
                 " <Esc> normal "
             }
@@ -182,7 +188,7 @@ impl App {
         };
         let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
-        let status = Line::from(vec![mode_span, conn_span, stats_span, hint_span]);
+        let status = Line::from(vec![mode_span, conn_span, error_span, stats_span, hint_span]);
         let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
         frame.render_widget(status_bar, outer[1]);
     }
@@ -198,8 +204,11 @@ impl App {
                 return;
             }
 
+            tracing::debug!("key: {:?}, modifiers: {:?}", key.code, key.modifiers);
+
             if self.editor_open {
                 let (new_mode, action) = self.editor.handle_key(key, self.mode);
+                tracing::debug!("editor action: {:?}, new_mode: {:?}", action, new_mode);
                 self.mode = new_mode;
                 match action {
                     EditorAction::Execute => self.run_editor_sql(),
@@ -399,11 +408,14 @@ impl App {
                     self.connection_name = Some(format!("{name}: {error}"));
                 }
                 AsyncResult::QueryResult(result) => {
+                    let rows = result.rows.len();
                     self.last_result = Some(result);
                     self.last_error = None;
                     self.last_query_duration = self.query_start.take().map(|t| t.elapsed());
+                    tracing::info!("query returned {} rows", rows);
                 }
                 AsyncResult::QueryError(error) => {
+                    tracing::warn!("query error: {}", error);
                     self.last_error = Some(error);
                 }
             }
@@ -435,10 +447,23 @@ impl App {
 
     fn run_editor_sql(&mut self) {
         let sql = self.editor.content();
-        let Some(name) = self.connection_name.clone() else { return };
-        let Some(executor) = self.executors.get(&name).cloned() else { return };
+        tracing::info!("run_editor_sql: sql='{}'", sql.trim());
+        let Some(name) = self.connection_name.clone() else {
+            tracing::warn!("run_editor_sql: no connection_name");
+            return;
+        };
+        tracing::info!("run_editor_sql: connection_name='{}'", name);
+        let Some(executor) = self.executors.get(&name).cloned() else {
+            tracing::warn!(
+                "run_editor_sql: no executor for '{}'. available: {:?}",
+                name,
+                self.executors.keys().collect::<Vec<_>>()
+            );
+            return;
+        };
         self.query_start = Some(std::time::Instant::now());
         let tx = self.async_tx.clone();
+        tracing::info!("run_editor_sql: spawning query");
         self.runtime.spawn(async move {
             match executor.execute(&sql).await {
                 Ok(result) => {
