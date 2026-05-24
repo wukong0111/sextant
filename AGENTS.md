@@ -129,7 +129,8 @@ When the user says "vamos con la Fase X" or "implementa el punto Y":
 3. **Define the scope.** Ask whether the user wants the full phase or a specific subset.
 4. **Code → Verify → Commit.** Each plan task must compile, pass tests, have a verifiable success criterion, and be committed atomically with a descriptive message.
 5. **Update the plan immediately.** Mark the task as `[x] ✅` in `plan.md` and add the commit hash to the progress table.
-6. **If blocked, stop and report.** Do not improvise solutions to unplanned problems without consulting. Document blockers in the plan or an issue.
+6. **Plan/code sync: correctness wins.** If the implementation diverges from `plan.md` for technical reasons (compiler constraints, warnings, better practices, discovered blockers), update `plan.md` to reflect the actual code. The plan is a living document; correctness of the code always takes precedence over literal fidelity to the plan. Document the reason for the divergence in the plan or the commit message.
+7. **If blocked, stop and report.** Do not improvise solutions to unplanned problems without consulting. Document blockers in the plan or an issue.
 
 ---
 
