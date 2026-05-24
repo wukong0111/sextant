@@ -85,7 +85,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - Validar esquema básico (campos requisito por driver).
 - **NO implementar keyring todavía** — leer contraseña de variable de entorno `SEXTANT_<NAME>_PASSWORD` como fallback para v0.1.
 
-### 1.2 Capa de Drivers (`sextant-db`)
+### 1.2 Capa de Drivers (`sextant-db`) ✅
 
 - Dependencias: `sqlx` con features `runtime-tokio`, `postgres`, `sqlite`.
 - `struct SqlxExecutor { pool: Pool<Any> }` (usa `Any` para unificar PG y SQLite).
