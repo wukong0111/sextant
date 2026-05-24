@@ -11,7 +11,7 @@
 | Fase | Estado | Commit |
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
-| Fase 1 — v0.1 MVP | ⬜ Pendiente | — |
+| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config) |
 | Fase 2 — v0.2 | ⬜ Pendiente | — |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
@@ -78,7 +78,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - `trait QueryExecutor` con `fn execute(&self, sql: &str) -> impl Future<Output = Result<QueryResult, SextantError>> + Send` (desugared para garantizar bounds `Send` sin warnings del compilador)
 - `enum SextantError` usando `thiserror` (se añade como dependencia aquí, no antes).
 
-### 1.1 Capa de Configuración (`sextant-config`) ✅
+### 1.1 Capa de Configuración (`sextant-config`) ✅ (`fbee360`)
 
 - Cargar `connections.toml` desde `~/.config/sextant/connections.toml`.
 - Resolver paths XDG con `dirs` crate.
