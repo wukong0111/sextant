@@ -2,6 +2,7 @@
 
 pub mod connection_manager;
 pub mod executor;
+pub mod introspection;
 pub mod url_builder;
 
 pub use connection_manager::ConnectionManager;

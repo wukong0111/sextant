@@ -11,7 +11,7 @@
 | Fase | Estado | Commit |
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
-| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db) |
+| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), 1.3 sidebar |
 | Fase 2 — v0.2 | ⬜ Pendiente | — |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
@@ -94,7 +94,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   - Soportar `SELECT` (devuelve `QueryResult`) y comandos DDL/DML (devuelve `QueryResult` vacío con `rows_affected`).
 - **Pool por conexión activa**: `HashMap<String, Pool<Any>>` manejado por un `ConnectionManager`.
 
-### 1.3 Árbol de Conexiones (sidebar)
+### 1.3 Árbol de Conexiones (sidebar) ✅
 
 - Componente `TreePane` en `sextant-ui`.
 - Lista plana de conexiones desde `sextant-config`.

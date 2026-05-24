@@ -15,6 +15,11 @@ impl SqlxExecutor {
         Self { pool }
     }
 
+    /// Access the underlying pool.
+    pub fn pool(&self) -> &AnyPool {
+        &self.pool
+    }
+
     /// Create a new pool from a connection URL.
     pub async fn connect(url: &str) -> Result<Self, SextantError> {
         install_drivers();

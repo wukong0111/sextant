@@ -9,7 +9,7 @@ use crate::executor::SqlxExecutor;
 use crate::url_builder::build_connection_url;
 
 /// Maintains a map of named connection pools.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ConnectionManager {
     pools: HashMap<String, AnyPool>,
 }

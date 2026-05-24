@@ -8,6 +8,9 @@ license.workspace = true
 
 [dependencies]
 sextant-core = { path = "../sextant-core" }
+sextant-config = { path = "../sextant-config" }
+sextant-db = { path = "../sextant-db" }
 ratatui = "0.30"
 crossterm = "0.29"
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
