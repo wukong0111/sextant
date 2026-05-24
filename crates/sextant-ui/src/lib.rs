@@ -153,6 +153,14 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     #[test]
+    fn app_default_state() {
+        let app = App::default();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.connection_name, None);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
     fn renders_status_line() {
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -171,6 +179,89 @@ mod tests {
     }
 
     #[test]
+    fn renders_insert_mode_in_yellow() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::default();
+        app.mode = Mode::Insert;
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let last_row = buf.content.chunks(buf.area.width as usize).last().unwrap();
+        let text: String = last_row.iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("INS"), "status line should show Insert mode: {text}");
+
+        let idx = last_row.iter().position(|c| c.symbol() == "I").unwrap();
+        assert_eq!(last_row[idx].style().bg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn renders_connection_name_when_set() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::default();
+        app.connection_name = Some("local-pg".into());
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let last_row = buf.content.chunks(buf.area.width as usize).last().unwrap();
+        let text: String = last_row.iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("local-pg"),
+            "status line should show connection name: {text}"
+        );
+        assert!(
+            !text.contains("no connection"),
+            "status line should not show fallback: {text}"
+        );
+    }
+
+    #[test]
+    fn main_area_has_black_background() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = App::default();
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        // Sample cells from the main area (rows 0 and 5) — not the status line (row 9).
+        for y in [0, 5] {
+            let cell = &buf[(0, y)];
+            assert_eq!(cell.style().bg, Some(Color::Black), "bg at (0,{y}) should be Black");
+        }
+    }
+
+    #[test]
+    fn layout_leaves_last_row_for_status() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = App::default();
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = buf
+            .content
+            .chunks(buf.area.width as usize)
+            .map(|row| row.iter().map(|c| c.symbol()).collect())
+            .collect();
+
+        // Rows 0..8 should be empty (just spaces from the empty Paragraph block).
+        for (i, row) in rows.iter().enumerate().take(9) {
+            assert!(
+                row.trim().is_empty(),
+                "row {i} should be empty main area, got: {row}"
+            );
+        }
+
+        // Row 9 should contain the status line text.
+        assert!(rows[9].contains("NOR"), "last row should contain status: {}", rows[9]);
+    }
+
+    #[test]
     fn ctrl_q_sets_should_quit() {
         let mut app = App::default();
         assert!(!app.should_quit);
@@ -181,5 +272,35 @@ mod tests {
         )));
 
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn ignores_key_release() {
+        let mut app = App::default();
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new_with_kind(
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Release,
+        )));
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn ignores_plain_q() {
+        let mut app = App::default();
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn ignores_resize_events() {
+        let mut app = App::default();
+        app.handle_event(Event::Resize(80, 24));
+        assert!(!app.should_quit);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.connection_name, None);
     }
 }

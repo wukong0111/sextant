@@ -91,6 +91,7 @@ The binary opens a TUI window. In the current Phase 0 implementation it shows a 
 - Use `ratatui::backend::TestBackend` to test widget rendering without a real TTY.
 - Example: `crates/sextant-ui/src/lib.rs` contains tests for status-line rendering and `Ctrl+Q` handling.
 - Service crates (`sextant-db`, `sextant-config`) should be unit-testable without spinning up the full TUI.
+- **Do not write tests that only verify compiler derive macros.** A test that asserts `assert_eq!(Enum::A, Enum::A)` on a `#[derive(PartialEq)]` type, or checks that `#[from] std::io::Error` produces the expected variant, tests the language—not your code. Tests must validate project-specific logic: custom behavior, business rules, non-obvious edge cases, or invariants that are not guaranteed by the type definition alone.
 
 ### Integration Tests
 

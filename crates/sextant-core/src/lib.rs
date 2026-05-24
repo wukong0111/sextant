@@ -78,41 +78,4 @@ pub trait QueryExecutor: Send + Sync {
     ) -> impl std::future::Future<Output = Result<QueryResult, SextantError>> + Send;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn driver_round_trip() {
-        assert_eq!(Driver::Postgres, Driver::Postgres);
-        assert_ne!(Driver::Postgres, Driver::Sqlite);
-    }
-
-    #[test]
-    fn cell_value_equality() {
-        assert_eq!(CellValue::I64(42), CellValue::I64(42));
-        assert_eq!(CellValue::Null, CellValue::Null);
-        assert_ne!(CellValue::I64(42), CellValue::F64(42.0));
-    }
-
-    #[test]
-    fn query_result_default() {
-        let qr = QueryResult {
-            columns: vec![Column {
-                name: "id".into(),
-                type_name: "INT4".into(),
-            }],
-            rows: vec![vec![CellValue::I64(1)]],
-            rows_affected: None,
-        };
-        assert_eq!(qr.rows.len(), 1);
-        assert_eq!(qr.columns.len(), 1);
-    }
-
-    #[test]
-    fn sextant_error_from_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "nope");
-        let err: SextantError = io_err.into();
-        assert!(matches!(err, SextantError::Io(_)));
-    }
-}
