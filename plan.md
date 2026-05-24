@@ -67,7 +67,7 @@
 
 **Objetivo**: Conectar a PostgreSQL y SQLite, ejecutar SQL básico, ver resultados en grid, editor modal simple.
 
-### 1.0 Tipos base en `sextant-core`
+### 1.0 Tipos base en `sextant-core` ✅ (`da4546e`)
 
 Definir solo lo que Fase 1 necesita (nada especulativo):
 - `enum Driver { Postgres, Mysql, Sqlite }`
@@ -75,7 +75,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - `enum CellValue { Null, Bool, I64, F64, String, Bytes }`
 - `struct Column { name, type_name }`
 - `struct QueryResult { columns, rows, rows_affected }`
-- `trait QueryExecutor` con `async fn execute(&self, sql: &str) -> Result<QueryResult, SextantError>`
+- `trait QueryExecutor` con `fn execute(&self, sql: &str) -> impl Future<Output = Result<QueryResult, SextantError>> + Send` (desugared para garantizar bounds `Send` sin warnings del compilador)
 - `enum SextantError` usando `thiserror` (se añade como dependencia aquí, no antes).
 
 ### 1.1 Capa de Configuración (`sextant-config`)
