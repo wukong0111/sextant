@@ -8,3 +8,8 @@ edition = "2024"
 rust-version = "1.85"
 authors = ["wukong0111"]
 license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "6"
