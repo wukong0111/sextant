@@ -1293,6 +1293,9 @@ dependencies = [
 [[package]]
 name = "sextant-core"
 version = "0.1.0"
+dependencies = [
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "sextant-db"
