@@ -11,7 +11,7 @@
 | Fase | Estado | Commit |
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
-| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), 1.3 sidebar |
+| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `df9aae3` (1.4 editor) |
 | Fase 2 — v0.2 | ⬜ Pendiente | — |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
@@ -102,7 +102,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - Una vez conectada, expandir para mostrar: `database → schemas → tablas` (introspección mínima vía `information_schema` en PG; `sqlite_master` en SQLite).
 - Render: texto plano, sin iconos todavía.
 
-### 1.4 Editor SQL Modal (básico)
+### 1.4 Editor SQL Modal (básico) ✅
 
 - Componente `EditorModal`:
   - Usar `tui-textarea` o implementación propia ligera (recomendación: `tui-textarea` para v0.1, migrar a custom con tree-sitter en v0.2).

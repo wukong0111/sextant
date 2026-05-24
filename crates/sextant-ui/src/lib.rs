@@ -1,4 +1,4 @@
-use crossterm::{
+use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
@@ -11,7 +11,11 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
+use sextant_core::QueryExecutor;
 use std::io::{self, stdout, Stdout};
+
+mod editor_modal;
+use editor_modal::{EditorAction, EditorModal};
 
 mod tree_pane;
 use tree_pane::{ConnState, SchemaItem, TreePane};
@@ -41,6 +45,8 @@ enum AsyncResult {
         name: String,
         error: String,
     },
+    QueryResult(sextant_core::QueryResult),
+    QueryError(String),
 }
 
 /// Application state for the TUI.
@@ -54,6 +60,12 @@ pub struct App {
     async_rx: std::sync::mpsc::Receiver<AsyncResult>,
     async_tx: std::sync::mpsc::Sender<AsyncResult>,
     executors: std::collections::HashMap<String, sextant_db::SqlxExecutor>,
+    editor_open: bool,
+    editor: EditorModal,
+    pending_leader: bool,
+    saved_buffers: std::collections::HashMap<String, String>,
+    last_result: Option<sextant_core::QueryResult>,
+    last_error: Option<String>,
 }
 
 impl App {
@@ -77,11 +89,17 @@ impl App {
             async_rx,
             async_tx,
             executors: std::collections::HashMap::new(),
+            editor_open: false,
+            editor: EditorModal::new(),
+            pending_leader: false,
+            saved_buffers: std::collections::HashMap::new(),
+            last_result: None,
+            last_error: None,
         })
     }
 
     /// Render the application into the given frame.
-    pub fn render(&self, frame: &mut Frame) {
+    pub fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
         let outer = Layout::default()
@@ -105,6 +123,11 @@ impl App {
         );
         frame.render_widget(main, inner[1]);
 
+        // Editor modal (floating overlay).
+        if self.editor_open {
+            self.editor.render(frame, area);
+        }
+
         // Status line at the bottom.
         let mode_span = Span::styled(
             format!(" {} ", self.mode),
@@ -122,14 +145,23 @@ impl App {
             self.connection_name.as_deref().unwrap_or("no connection")
         ));
 
-        let hint_span = Span::styled(" <C-q> quit ", Style::default().fg(Color::DarkGray));
+        let hint = if self.editor_open {
+            if self.mode == Mode::Normal {
+                " <i> insert │ <C-Enter> run │ <Esc> close "
+            } else {
+                " <Esc> normal "
+            }
+        } else {
+            " <Space>e editor │ <C-q> quit "
+        };
+        let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
         let status = Line::from(vec![mode_span, conn_span, hint_span]);
         let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
         frame.render_widget(status_bar, outer[1]);
     }
 
-    fn draw(&self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
+    fn draw(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
         terminal.draw(|frame| self.render(frame))?;
         Ok(())
     }
@@ -137,6 +169,18 @@ impl App {
     fn handle_event(&mut self, event: Event) {
         if let Event::Key(key) = event {
             if key.kind != KeyEventKind::Press {
+                return;
+            }
+
+            if self.editor_open {
+                let (new_mode, action) = self.editor.handle_key(key, self.mode);
+                self.mode = new_mode;
+                match action {
+                    EditorAction::Execute => self.run_editor_sql(),
+                    EditorAction::Save => self.save_editor_buffer(),
+                    EditorAction::Close => self.close_editor(),
+                    EditorAction::None => {}
+                }
                 return;
             }
 
@@ -153,7 +197,16 @@ impl App {
                 KeyCode::Enter => {
                     self.handle_enter();
                 }
-                _ => {}
+                KeyCode::Char(' ') => {
+                    self.pending_leader = true;
+                }
+                KeyCode::Char('e') if self.pending_leader => {
+                    self.open_editor();
+                    self.pending_leader = false;
+                }
+                _ => {
+                    self.pending_leader = false;
+                }
             }
         }
     }
@@ -262,8 +315,55 @@ impl App {
                     }
                     self.connection_name = Some(format!("{name}: {error}"));
                 }
+                AsyncResult::QueryResult(result) => {
+                    self.last_result = Some(result);
+                    self.last_error = None;
+                }
+                AsyncResult::QueryError(error) => {
+                    self.last_error = Some(error);
+                }
             }
         }
+    }
+
+    fn open_editor(&mut self) {
+        self.editor_open = true;
+        self.mode = Mode::Normal;
+        if let Some(name) = &self.connection_name {
+            if let Some(buf) = self.saved_buffers.get(name) {
+                self.editor.set_content(buf);
+            }
+        }
+    }
+
+    fn close_editor(&mut self) {
+        self.editor_open = false;
+        self.mode = Mode::Normal;
+    }
+
+    fn save_editor_buffer(&mut self) {
+        if let Some(name) = &self.connection_name {
+            self.saved_buffers
+                .insert(name.clone(), self.editor.content());
+            self.editor.mark_saved();
+        }
+    }
+
+    fn run_editor_sql(&mut self) {
+        let sql = self.editor.content();
+        let Some(name) = self.connection_name.clone() else { return };
+        let Some(executor) = self.executors.get(&name).cloned() else { return };
+        let tx = self.async_tx.clone();
+        self.runtime.spawn(async move {
+            match executor.execute(&sql).await {
+                Ok(result) => {
+                    let _ = tx.send(AsyncResult::QueryResult(result));
+                }
+                Err(e) => {
+                    let _ = tx.send(AsyncResult::QueryError(format!("{e}")));
+                }
+            }
+        });
     }
 }
 
@@ -318,7 +418,7 @@ mod tests {
 
     #[test]
     fn app_default_state() {
-        let app = test_app();
+        let mut app = test_app();
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.connection_name, None);
         assert!(!app.should_quit);
@@ -328,7 +428,7 @@ mod tests {
     fn renders_status_line() {
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = test_app();
+        let mut app = test_app();
 
         terminal.draw(|frame| app.render(frame)).unwrap();
 
@@ -386,7 +486,7 @@ mod tests {
     fn main_area_has_black_background() {
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = test_app();
+        let mut app = test_app();
 
         terminal.draw(|frame| app.render(frame)).unwrap();
 
@@ -403,7 +503,7 @@ mod tests {
     fn layout_leaves_last_row_for_status() {
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = test_app();
+        let mut app = test_app();
 
         terminal.draw(|frame| app.render(frame)).unwrap();
 
@@ -422,7 +522,7 @@ mod tests {
     fn sidebar_is_rendered() {
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
-        let app = test_app();
+        let mut app = test_app();
 
         terminal.draw(|frame| app.render(frame)).unwrap();
 
@@ -442,7 +542,7 @@ mod tests {
         let mut app = test_app();
         assert!(!app.should_quit);
 
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
             KeyCode::Char('q'),
             KeyModifiers::CONTROL,
         )));
@@ -453,7 +553,7 @@ mod tests {
     #[test]
     fn ignores_key_release() {
         let mut app = test_app();
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new_with_kind(
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new_with_kind(
             KeyCode::Char('q'),
             KeyModifiers::CONTROL,
             KeyEventKind::Release,
@@ -464,7 +564,7 @@ mod tests {
     #[test]
     fn ignores_plain_q() {
         let mut app = test_app();
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
             KeyCode::Char('q'),
             KeyModifiers::NONE,
         )));
@@ -486,7 +586,7 @@ mod tests {
         // By default, the app loads connections from the user's config.
         // If there are no connections, this test is a no-op but still valid.
         let initial = app.tree.selected;
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
             KeyCode::Char('j'),
             KeyModifiers::NONE,
         )));
@@ -498,15 +598,123 @@ mod tests {
     fn k_moves_selection_up() {
         let mut app = test_app();
         // Move down first if possible, then up.
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
             KeyCode::Char('j'),
             KeyModifiers::NONE,
         )));
         let after_j = app.tree.selected;
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
             KeyCode::Char('k'),
             KeyModifiers::NONE,
         )));
         assert!(app.tree.selected <= after_j);
+    }
+
+    #[test]
+    fn editor_toggle_with_space_e() {
+        let mut app = test_app();
+        assert!(!app.editor_open);
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('e'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.editor_open);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn editor_close_with_esc_in_normal() {
+        let mut app = test_app();
+        app.open_editor();
+        assert!(app.editor_open);
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.editor_open);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn editor_mode_switch_i_esc() {
+        let mut app = test_app();
+        app.open_editor();
+        assert_eq!(app.mode, Mode::Normal);
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('i'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.mode, Mode::Insert);
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn editor_renders_when_open() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.open_editor();
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        // The modal should contain the "SQL Editor" title somewhere.
+        let text: String = buf.content.iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("SQL Editor"), "modal should render title: {text}");
+    }
+
+    #[test]
+    fn editor_saves_buffer_in_memory() {
+        let mut app = test_app();
+        app.connection_name = Some("test-conn".into());
+        app.open_editor();
+
+        // Type something in insert mode.
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('i'),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('S'),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('E'),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('L'),
+            KeyModifiers::NONE,
+        )));
+
+        // Return to normal mode, then save buffer with Ctrl+S.
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        )));
+
+        // Close modal.
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.editor_open);
+
+        // Clear content to prove restoration works.
+        app.editor.set_content("");
+        app.open_editor();
+        assert_eq!(app.editor.content(), "SEL");
     }
 }
