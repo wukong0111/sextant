@@ -11,7 +11,7 @@
 | Fase | Estado | Commit |
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
-| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config) |
+| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db) |
 | Fase 2 — v0.2 | ⬜ Pendiente | — |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
@@ -85,7 +85,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - Validar esquema básico (campos requisito por driver).
 - **NO implementar keyring todavía** — leer contraseña de variable de entorno `SEXTANT_<NAME>_PASSWORD` como fallback para v0.1.
 
-### 1.2 Capa de Drivers (`sextant-db`) ✅
+### 1.2 Capa de Drivers (`sextant-db`) ✅ (`6dfb9cf`)
 
 - Dependencias: `sqlx` con features `runtime-tokio`, `postgres`, `sqlite`.
 - `struct SqlxExecutor { pool: Pool<Any> }` (usa `Any` para unificar PG y SQLite).
