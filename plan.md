@@ -11,7 +11,7 @@
 | Fase | Estado | Commit |
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
-| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `df9aae3` (1.4 editor) |
+| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor) |
 | Fase 2 — v0.2 | ⬜ Pendiente | — |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
