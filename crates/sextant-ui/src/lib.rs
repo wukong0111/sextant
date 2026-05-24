@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
     Frame, Terminal,
 };
 use sextant_core::QueryExecutor;
@@ -20,10 +20,19 @@ use editor_modal::{EditorAction, EditorModal};
 mod tree_pane;
 use tree_pane::{ConnState, SchemaItem, TreePane};
 
+mod result_grid;
+use result_grid::ResultGrid;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
     Insert,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Focus {
+    Tree,
+    Grid,
 }
 
 impl std::fmt::Display for Mode {
@@ -63,9 +72,14 @@ pub struct App {
     editor_open: bool,
     editor: EditorModal,
     pending_leader: bool,
+    pending_g: bool,
     saved_buffers: std::collections::HashMap<String, String>,
     last_result: Option<sextant_core::QueryResult>,
     last_error: Option<String>,
+    last_query_duration: Option<std::time::Duration>,
+    query_start: Option<std::time::Instant>,
+    focus: Focus,
+    result_grid: ResultGrid,
 }
 
 impl App {
@@ -92,9 +106,14 @@ impl App {
             editor_open: false,
             editor: EditorModal::new(),
             pending_leader: false,
+            pending_g: false,
             saved_buffers: std::collections::HashMap::new(),
             last_result: None,
             last_error: None,
+            last_query_duration: None,
+            query_start: None,
+            focus: Focus::Tree,
+            result_grid: ResultGrid::new(),
         })
     }
 
@@ -115,13 +134,9 @@ impl App {
         // Sidebar tree pane.
         self.tree.render(frame, inner[0]);
 
-        // Main empty area.
-        let main = Paragraph::new("").block(
-            Block::default()
-                .borders(Borders::NONE)
-                .style(Style::default().bg(Color::Black)),
-        );
-        frame.render_widget(main, inner[1]);
+        // Main area: result grid.
+        self.result_grid.set_result(self.last_result.clone());
+        self.result_grid.render(frame, inner[1]);
 
         // Editor modal (floating overlay).
         if self.editor_open {
@@ -145,6 +160,17 @@ impl App {
             self.connection_name.as_deref().unwrap_or("no connection")
         ));
 
+        let stats_span = if let Some(ref result) = self.last_result {
+            let rows = result.rows.len();
+            let dur = self
+                .last_query_duration
+                .map(|d| format!("{}ms", d.as_millis()))
+                .unwrap_or_else(|| "-".into());
+            Span::raw(format!(" {rows} rows / {dur} │ "))
+        } else {
+            Span::raw(" ")
+        };
+
         let hint = if self.editor_open {
             if self.mode == Mode::Normal {
                 " <i> insert │ <C-Enter> run │ <Esc> close "
@@ -156,7 +182,7 @@ impl App {
         };
         let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
-        let status = Line::from(vec![mode_span, conn_span, hint_span]);
+        let status = Line::from(vec![mode_span, conn_span, stats_span, hint_span]);
         let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
         frame.render_widget(status_bar, outer[1]);
     }
@@ -188,24 +214,81 @@ impl App {
                 KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.should_quit = true;
                 }
-                KeyCode::Char('j') => {
-                    self.tree.next();
+                KeyCode::Tab => {
+                    self.focus = match self.focus {
+                        Focus::Tree => Focus::Grid,
+                        Focus::Grid => Focus::Tree,
+                    };
+                    self.pending_leader = false;
+                    self.pending_g = false;
                 }
-                KeyCode::Char('k') => {
-                    self.tree.prev();
+                KeyCode::Char('j') if key.modifiers.is_empty() => {
+                    match self.focus {
+                        Focus::Tree => self.tree.next(),
+                        Focus::Grid => self.result_grid.move_down(),
+                    }
+                    self.pending_leader = false;
+                    self.pending_g = false;
+                }
+                KeyCode::Char('k') if key.modifiers.is_empty() => {
+                    match self.focus {
+                        Focus::Tree => self.tree.prev(),
+                        Focus::Grid => self.result_grid.move_up(),
+                    }
+                    self.pending_leader = false;
+                    self.pending_g = false;
+                }
+                KeyCode::Char('h') if key.modifiers.is_empty() => {
+                    if self.focus == Focus::Grid {
+                        self.result_grid.move_left();
+                    }
+                    self.pending_leader = false;
+                    self.pending_g = false;
+                }
+                KeyCode::Char('l') if key.modifiers.is_empty() => {
+                    if self.focus == Focus::Grid {
+                        self.result_grid.move_right();
+                    }
+                    self.pending_leader = false;
+                    self.pending_g = false;
+                }
+                KeyCode::Char('g') if key.modifiers.is_empty() => {
+                    if self.focus == Focus::Grid {
+                        if self.pending_g {
+                            self.result_grid.top();
+                            self.pending_g = false;
+                        } else {
+                            self.pending_g = true;
+                        }
+                    }
+                    self.pending_leader = false;
+                }
+                KeyCode::Char('G') if key.modifiers.is_empty() => {
+                    if self.focus == Focus::Grid {
+                        self.result_grid.bottom();
+                    }
+                    self.pending_leader = false;
+                    self.pending_g = false;
                 }
                 KeyCode::Enter => {
-                    self.handle_enter();
+                    if self.focus == Focus::Tree {
+                        self.handle_enter();
+                    }
+                    self.pending_leader = false;
+                    self.pending_g = false;
                 }
                 KeyCode::Char(' ') => {
                     self.pending_leader = true;
+                    self.pending_g = false;
                 }
                 KeyCode::Char('e') if self.pending_leader => {
                     self.open_editor();
                     self.pending_leader = false;
+                    self.pending_g = false;
                 }
                 _ => {
                     self.pending_leader = false;
+                    self.pending_g = false;
                 }
             }
         }
@@ -318,6 +401,7 @@ impl App {
                 AsyncResult::QueryResult(result) => {
                     self.last_result = Some(result);
                     self.last_error = None;
+                    self.last_query_duration = self.query_start.take().map(|t| t.elapsed());
                 }
                 AsyncResult::QueryError(error) => {
                     self.last_error = Some(error);
@@ -353,6 +437,7 @@ impl App {
         let sql = self.editor.content();
         let Some(name) = self.connection_name.clone() else { return };
         let Some(executor) = self.executors.get(&name).cloned() else { return };
+        self.query_start = Some(std::time::Instant::now());
         let tx = self.async_tx.clone();
         self.runtime.spawn(async move {
             match executor.execute(&sql).await {
@@ -418,7 +503,7 @@ mod tests {
 
     #[test]
     fn app_default_state() {
-        let mut app = test_app();
+        let app = test_app();
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.connection_name, None);
         assert!(!app.should_quit);
@@ -716,5 +801,125 @@ mod tests {
         app.editor.set_content("");
         app.open_editor();
         assert_eq!(app.editor.content(), "SEL");
+    }
+
+    #[test]
+    fn tab_cycles_focus() {
+        let mut app = test_app();
+        assert_eq!(app.focus, Focus::Tree);
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.focus, Focus::Grid);
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.focus, Focus::Tree);
+    }
+
+    #[test]
+    fn grid_renders_when_result_present() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.last_result = Some(sextant_core::QueryResult {
+            columns: vec![sextant_core::Column {
+                name: "id".into(),
+                type_name: "int".into(),
+            }],
+            rows: vec![vec![sextant_core::CellValue::I64(42)]],
+            rows_affected: None,
+        });
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let text: String = buf.content.iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("id"), "grid should render header: {text}");
+        assert!(text.contains("42"), "grid should render cell value: {text}");
+    }
+
+    #[test]
+    fn status_line_shows_row_count_and_duration() {
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.connection_name = Some("local-pg".into());
+        app.last_result = Some(sextant_core::QueryResult {
+            columns: vec![sextant_core::Column {
+                name: "x".into(),
+                type_name: "int".into(),
+            }],
+            rows: vec![vec![sextant_core::CellValue::I64(1)]],
+            rows_affected: None,
+        });
+        app.last_query_duration = Some(std::time::Duration::from_millis(38));
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let last_row = buf.content.chunks(buf.area.width as usize).last().unwrap();
+        let text: String = last_row.iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("1 rows / 38ms"),
+            "status line should show rows and duration: {text}"
+        );
+    }
+
+    #[test]
+    fn gg_moves_grid_to_top() {
+        let mut app = test_app();
+        app.focus = Focus::Grid;
+        app.last_result = Some(sextant_core::QueryResult {
+            columns: vec![sextant_core::Column {
+                name: "x".into(),
+                type_name: "int".into(),
+            }],
+            rows: vec![
+                vec![sextant_core::CellValue::I64(1)],
+                vec![sextant_core::CellValue::I64(2)],
+            ],
+            rows_affected: None,
+        });
+        app.result_grid.set_result(app.last_result.clone());
+        app.result_grid.bottom();
+        assert_eq!(app.result_grid.cursor_row(), 1);
+
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.result_grid.cursor_row(), 0);
+    }
+
+    #[test]
+    fn g_moves_grid_to_bottom() {
+        let mut app = test_app();
+        app.focus = Focus::Grid;
+        app.last_result = Some(sextant_core::QueryResult {
+            columns: vec![sextant_core::Column {
+                name: "x".into(),
+                type_name: "int".into(),
+            }],
+            rows: vec![
+                vec![sextant_core::CellValue::I64(1)],
+                vec![sextant_core::CellValue::I64(2)],
+            ],
+            rows_affected: None,
+        });
+        app.result_grid.set_result(app.last_result.clone());
+        assert_eq!(app.result_grid.cursor_row(), 0);
+
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('G'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.result_grid.cursor_row(), 1);
     }
 }

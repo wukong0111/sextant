@@ -11,7 +11,7 @@
 | Fase | Estado | Commit |
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
-| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor) |
+| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `7da396c` (1.5 grid) |
 | Fase 2 — v0.2 | ⬜ Pendiente | — |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
@@ -114,7 +114,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   - Sin syntax highlight, sin autocomplete.
   - Buffer por conexión (1 solo buffer en v0.1).
 
-### 1.5 Grid de Resultados (read-only)
+### 1.5 Grid de Resultados (read-only) ✅
 
 - Componente `ResultGrid`:
   - Recibe `QueryResult`, renderiza tabla con `ratatui::widgets::Table`.
