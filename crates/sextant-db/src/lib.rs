@@ -152,5 +152,35 @@ mod tests {
         assert_eq!(result.rows[0][0], CellValue::I64(1));
         assert_eq!(result.rows[0][1], CellValue::String("hello".to_string()));
     }
+
+    #[tokio::test]
+    async fn mysql_integration() {
+        let url = std::env::var("SEXTANT_TEST_MYSQL_URL").unwrap_or_default();
+        if url.is_empty() {
+            return; // skip if no test database is configured
+        }
+
+        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
+        let exec = SqlxExecutor::new(DbPool::MySql(pool));
+
+        exec.execute("CREATE TEMPORARY TABLE mysql_test (id INT PRIMARY KEY, label VARCHAR(100), amount DECIMAL(10,2), created_at DATETIME, payload JSON)")
+            .await
+            .unwrap();
+
+        exec.execute("INSERT INTO mysql_test VALUES (1, 'hello', 42.00, '2024-01-15 10:30:00', '{\"key\": \"value\"}')")
+            .await
+            .unwrap();
+
+        let result = exec.execute("SELECT id, label, amount, created_at, payload FROM mysql_test")
+            .await
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], CellValue::I64(1));
+        assert_eq!(result.rows[0][1], CellValue::String("hello".to_string()));
+        assert_eq!(result.rows[0][2], CellValue::String("42.00".to_string()));
+        assert_eq!(result.rows[0][3], CellValue::String("2024-01-15 10:30:00".to_string()));
+        assert_eq!(result.rows[0][4], CellValue::String("{\"key\": \"value\"}".to_string()));
+    }
 }
 

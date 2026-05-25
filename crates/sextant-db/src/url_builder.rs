@@ -13,9 +13,7 @@ pub fn build_connection_url(
     match conn.driver {
         Driver::Postgres => build_postgres_url(conn, password),
         Driver::Sqlite => build_sqlite_url(conn),
-        Driver::Mysql => Err(SextantError::Config(
-            "MySQL is not supported in v0.1".to_string(),
-        )),
+        Driver::Mysql => build_mysql_url(conn, password),
     }
 }
 
@@ -49,6 +47,35 @@ fn build_postgres_url(conn: &Connection, password: Option<&str>) -> Result<Strin
         url.push_str("?sslmode=");
         url.push_str(ssl);
     }
+
+    Ok(url)
+}
+
+fn build_mysql_url(conn: &Connection, password: Option<&str>) -> Result<String, SextantError> {
+    let host = conn.host.as_ref().ok_or_else(|| {
+        SextantError::Config(format!("connection '{}' missing host", conn.name))
+    })?;
+    let port = conn.port.ok_or_else(|| {
+        SextantError::Config(format!("connection '{}' missing port", conn.name))
+    })?;
+    let user = conn.user.as_ref().ok_or_else(|| {
+        SextantError::Config(format!("connection '{}' missing user", conn.name))
+    })?;
+    let database = conn.database.as_ref().ok_or_else(|| {
+        SextantError::Config(format!("connection '{}' missing database", conn.name))
+    })?;
+
+    let mut url = format!("mysql://{user}");
+    if let Some(pass) = password {
+        url.push(':');
+        url.push_str(pass);
+    }
+    url.push('@');
+    url.push_str(host);
+    url.push(':');
+    url.push_str(&port.to_string());
+    url.push('/');
+    url.push_str(database);
 
     Ok(url)
 }
@@ -143,20 +170,29 @@ mod tests {
         assert!(!url.contains("~"));
     }
 
-    #[test]
-    fn mysql_not_supported() {
-        let conn = Connection {
-            name: "bad".to_string(),
+    fn mysql_conn() -> Connection {
+        Connection {
+            name: "local-mysql".to_string(),
             driver: Driver::Mysql,
-            host: Some("localhost".to_string()),
+            host: Some("127.0.0.1".to_string()),
             port: Some(3306),
-            user: Some("root".to_string()),
-            database: Some("db".to_string()),
+            user: Some("app".to_string()),
+            database: Some("scratch".to_string()),
             ssl_mode: None,
             path: None,
             keyring_key: None,
-        };
-        let err = build_connection_url(&conn, None).unwrap_err();
-        assert!(format!("{err}").contains("MySQL is not supported"));
+        }
+    }
+
+    #[test]
+    fn mysql_url_with_password() {
+        let url = build_connection_url(&mysql_conn(), Some("secret")).unwrap();
+        assert_eq!(url, "mysql://app:secret@127.0.0.1:3306/scratch");
+    }
+
+    #[test]
+    fn mysql_url_without_password() {
+        let url = build_connection_url(&mysql_conn(), None).unwrap();
+        assert_eq!(url, "mysql://app@127.0.0.1:3306/scratch");
     }
 }

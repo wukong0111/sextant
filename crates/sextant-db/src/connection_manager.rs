@@ -44,9 +44,10 @@ impl ConnectionManager {
                 DbPool::Sqlite(pool)
             }
             Driver::Mysql => {
-                return Err(SextantError::Config(
-                    "MySQL is not supported in v0.1".to_string(),
-                ));
+                let pool = sqlx::MySqlPool::connect(&url)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("failed to connect to {name}: {e}")))?;
+                DbPool::MySql(pool)
             }
         };
 

@@ -24,9 +24,7 @@ impl SqlxExecutor {
         match driver {
             Driver::Postgres => self.introspect_postgres().await,
             Driver::Sqlite => self.introspect_sqlite().await,
-            Driver::Mysql => Err(SextantError::Config(
-                "MySQL introspection is not supported in v0.1".to_string(),
-            )),
+            Driver::Mysql => self.introspect_mysql().await,
         }
     }
 
@@ -55,6 +53,52 @@ impl SqlxExecutor {
             let table_rows = sqlx::query::<sqlx::Postgres>(
                 "SELECT table_name FROM information_schema.tables \
                  WHERE table_schema = $1 AND table_type = 'BASE TABLE' \
+                 ORDER BY table_name",
+            )
+            .bind(&name)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| SextantError::Database(format!("failed to list tables: {e}")))?;
+
+            let tables = table_rows
+                .into_iter()
+                .map(|r| {
+                    r.try_get::<String, _>("table_name")
+                        .map_err(|e| SextantError::Database(format!("failed to read table_name: {e}")))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            schemas.push(Schema { name, tables });
+        }
+
+        Ok(schemas)
+    }
+
+    async fn introspect_mysql(&self) -> Result<Vec<Schema>, SextantError> {
+        let DbPool::MySql(pool) = self.pool() else {
+            return Err(SextantError::Database(
+                "expected mysql pool".to_string(),
+            ));
+        };
+
+        let schema_rows = sqlx::query::<sqlx::MySql>(
+            "SELECT schema_name FROM information_schema.schemata \
+             WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') \
+             ORDER BY schema_name",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SextantError::Database(format!("failed to list schemas: {e}")))?;
+
+        let mut schemas = Vec::with_capacity(schema_rows.len());
+        for row in schema_rows {
+            let name: String = row.try_get("schema_name").map_err(|e| {
+                SextantError::Database(format!("failed to read schema_name: {e}"))
+            })?;
+
+            let table_rows = sqlx::query::<sqlx::MySql>(
+                "SELECT table_name FROM information_schema.tables \
+                 WHERE table_schema = ? AND table_type = 'BASE TABLE' \
                  ORDER BY table_name",
             )
             .bind(&name)
@@ -177,6 +221,16 @@ mod tests {
         let exec = sqlite_executor().await;
         let result = exec.introspect_schemas_and_tables(Driver::Postgres).await;
         // Will fail because sqlite doesn't have information_schema.schemata,
+        // but we verify the code path compiles and runs.
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn mysql_not_available_at_runtime() {
+        // This test just verifies the function path exists for MySQL.
+        let exec = sqlite_executor().await;
+        let result = exec.introspect_schemas_and_tables(Driver::Mysql).await;
+        // Will fail because sqlite doesn't have the expected MySQL pool,
         // but we verify the code path compiles and runs.
         assert!(result.is_err());
     }

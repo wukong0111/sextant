@@ -7,6 +7,7 @@ use sqlx::{Column as _, Database, Decode, Row, Type, TypeInfo};
 #[derive(Debug, Clone)]
 pub enum DbPool {
     Postgres(sqlx::PgPool),
+    MySql(sqlx::MySqlPool),
     Sqlite(sqlx::SqlitePool),
 }
 
@@ -59,6 +60,41 @@ impl QueryExecutor for SqlxExecutor {
             }
             (DbPool::Postgres(pool), false) => {
                 let result = sqlx::query::<sqlx::Postgres>(sqlx::AssertSqlSafe(sql))
+                    .execute(pool)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
+
+                Ok(QueryResult {
+                    columns: vec![],
+                    rows: vec![],
+                    rows_affected: Some(result.rows_affected()),
+                })
+            }
+            (DbPool::MySql(pool), true) => {
+                let rows = sqlx::query::<sqlx::MySql>(sqlx::AssertSqlSafe(sql))
+                    .fetch_all(pool)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
+
+                if rows.is_empty() {
+                    return Ok(QueryResult {
+                        columns: vec![],
+                        rows: vec![],
+                        rows_affected: None,
+                    });
+                }
+
+                let columns = extract_columns(&rows[0]);
+                let data = rows.iter().map(|r| map_row(r)).collect::<Result<_, _>>()?;
+
+                Ok(QueryResult {
+                    columns,
+                    rows: data,
+                    rows_affected: None,
+                })
+            }
+            (DbPool::MySql(pool), false) => {
+                let result = sqlx::query::<sqlx::MySql>(sqlx::AssertSqlSafe(sql))
                     .execute(pool)
                     .await
                     .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
