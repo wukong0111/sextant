@@ -2,6 +2,7 @@ use color_eyre::Result;
 use std::fs::OpenOptions;
 
 fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     color_eyre::install()?;
 
     let log_dir = dirs::config_dir()

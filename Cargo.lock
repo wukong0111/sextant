@@ -1721,6 +1721,7 @@ version = "0.1.0"
 dependencies = [
  "color-eyre",
  "dirs",
+ "dotenvy",
  "sextant-ui",
  "tracing",
  "tracing-appender",

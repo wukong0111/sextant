@@ -14,6 +14,7 @@ path = "src/main.rs"
 sextant-ui = { path = "../sextant-ui" }
 color-eyre = "0.6"
 dirs = { workspace = true }
+dotenvy = "0.15"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
