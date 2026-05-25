@@ -12,7 +12,7 @@
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
 | Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `4a2636e` (fix SQLite BOOLEAN) |
-| Fase 2 — v0.2 | ⬜ Pendiente | — |
+| Fase 2 — v0.2 | 🔄 En progreso | `432d8df` (2.1 MySQL) |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
 ## Principios Directores
@@ -158,11 +158,11 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 
 **Objetivo**: Completar los 3 drivers, editor con syntax highlighting, CRUD en grid, árbol con DDL.
 
-### 2.1 Driver MySQL
+### 2.1 Driver MySQL ✅ (`432d8df`)
 
-- Añadir feature `mysql` a `sqlx` en `sextant-db`.
-- Ajustar mapeo de tipos (`DECIMAL`, `DATETIME`, `JSON`).
-- Introspección vía `information_schema` (MySQL 8+).
+- [x] Añadir feature `mysql` a `sqlx` en `sextant-db`.
+- [x] Ajustar mapeo de tipos (`DECIMAL`, `DATETIME`, `JSON` → fallback a `String` en sqlx).
+- [x] Introspección vía `information_schema` (MySQL 8+).
 
 ### 2.2 Syntax Highlighting
 
