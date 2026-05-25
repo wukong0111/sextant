@@ -20,8 +20,13 @@ user = "sextant"
 database = "sextant_test"
 # Password read from SEXTANT_DOCKER_MYSQL_PASSWORD env var
 
-# Local SQLite example (in-memory, no file needed)
+# Local SQLite examples
 [[connection]]
 name = "local-sqlite"
 driver = "sqlite"
 path = ":memory:"
+
+[[connection]]
+name = "local-sqlite-file"
+driver = "sqlite"
+path = "test.db"
