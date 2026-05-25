@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.4-alpine
     container_name: sextant-postgres-test
     environment:
       POSTGRES_USER: sextant
@@ -9,7 +9,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - sextant-postgres-data:/var/lib/postgresql/data
+      - sextant-postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sextant -d sextant_test"]
       interval: 2s
@@ -17,7 +17,7 @@ services:
       retries: 10
 
   mysql:
-    image: mysql:8
+    image: mysql:9.7
     container_name: sextant-mysql-test
     environment:
       MYSQL_ROOT_PASSWORD: root
