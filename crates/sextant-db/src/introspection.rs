@@ -82,7 +82,7 @@ impl SqlxExecutor {
         };
 
         let schema_rows = sqlx::query::<sqlx::MySql>(
-            "SELECT schema_name FROM information_schema.schemata \
+            "SELECT schema_name AS `schema_name` FROM information_schema.schemata \
              WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') \
              ORDER BY schema_name",
         )
@@ -97,7 +97,7 @@ impl SqlxExecutor {
             })?;
 
             let table_rows = sqlx::query::<sqlx::MySql>(
-                "SELECT table_name FROM information_schema.tables \
+                "SELECT table_name AS `table_name` FROM information_schema.tables \
                  WHERE table_schema = ? AND table_type = 'BASE TABLE' \
                  ORDER BY table_name",
             )

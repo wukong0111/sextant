@@ -11,7 +11,7 @@ pub use url_builder::build_connection_url;
 
 #[cfg(test)]
 mod tests {
-    use sextant_core::{CellValue, QueryExecutor};
+    use sextant_core::{CellValue, Driver, QueryExecutor};
 
     use super::*;
 
@@ -199,6 +199,62 @@ mod tests {
 
         // Clean up.
         exec.execute("DROP TABLE IF EXISTS mysql_test").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn postgresql_introspection_integration() {
+        let url = std::env::var("SEXTANT_TEST_PG_URL").unwrap_or_default();
+        if url.is_empty() {
+            return; // skip if no test database is configured
+        }
+
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let exec = SqlxExecutor::new(DbPool::Postgres(pool));
+
+        let _ = exec.execute("DROP TABLE IF EXISTS pg_introspect_test").await;
+        exec.execute("CREATE TABLE pg_introspect_test (id INT PRIMARY KEY)")
+            .await
+            .unwrap();
+
+        let schemas = exec
+            .introspect_schemas_and_tables(Driver::Postgres)
+            .await
+            .unwrap();
+        let public = schemas
+            .iter()
+            .find(|s| s.name == "public")
+            .expect("public schema should exist");
+        assert!(public.tables.contains(&"pg_introspect_test".to_string()));
+
+        let _ = exec.execute("DROP TABLE IF EXISTS pg_introspect_test").await;
+    }
+
+    #[tokio::test]
+    async fn mysql_introspection_integration() {
+        let url = std::env::var("SEXTANT_TEST_MYSQL_URL").unwrap_or_default();
+        if url.is_empty() {
+            return; // skip if no test database is configured
+        }
+
+        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
+        let exec = SqlxExecutor::new(DbPool::MySql(pool));
+
+        let _ = exec.execute("DROP TABLE IF EXISTS mysql_introspect_test").await;
+        exec.execute("CREATE TABLE mysql_introspect_test (id INT PRIMARY KEY)")
+            .await
+            .unwrap();
+
+        let schemas = exec
+            .introspect_schemas_and_tables(Driver::Mysql)
+            .await
+            .unwrap();
+        let sextant_test = schemas
+            .iter()
+            .find(|s| s.name == "sextant_test")
+            .expect("sextant_test schema should exist");
+        assert!(sextant_test.tables.contains(&"mysql_introspect_test".to_string()));
+
+        let _ = exec.execute("DROP TABLE IF EXISTS mysql_introspect_test").await;
     }
 }
 
