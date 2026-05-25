@@ -30,6 +30,11 @@ impl ResultGrid {
         self.cursor_col = 0;
     }
 
+    /// Return a reference to the current result, if any.
+    pub fn result(&self) -> &Option<QueryResult> {
+        &self.result
+    }
+
     /// Move the cursor one row up, clamped at the first row.
     pub fn move_up(&mut self) {
         if self.cursor_row > 0 {
@@ -145,13 +150,9 @@ impl ResultGrid {
 
         let table = Table::new(rows, constraints)
             .header(header)
-            .row_highlight_style(Style::default().bg(Color::DarkGray))
             .block(Block::default().borders(Borders::NONE).style(Style::default().bg(Color::Black)));
 
-        let mut state = ratatui::widgets::TableState::default();
-        state.select(Some(self.cursor_row));
-
-        frame.render_stateful_widget(table, area, &mut state);
+        frame.render_widget(table, area);
     }
 
     /// Current cursor row (useful for tests).

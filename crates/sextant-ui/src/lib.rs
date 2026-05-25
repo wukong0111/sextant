@@ -148,7 +148,9 @@ impl App {
         self.tree.render(frame, inner[0]);
 
         // Main area: result grid.
-        self.result_grid.set_result(self.last_result.clone());
+        if self.result_grid.result() != &self.last_result {
+            self.result_grid.set_result(self.last_result.clone());
+        }
         self.result_grid.render(frame, inner[1]);
 
         // Editor modal (floating overlay).
@@ -994,5 +996,91 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert_eq!(app.result_grid.cursor_row(), 1);
+    }
+
+    #[test]
+    fn cursor_persists_after_render() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.focus = Focus::Grid;
+        app.last_result = Some(sextant_core::QueryResult {
+            columns: vec![sextant_core::Column {
+                name: "x".into(),
+                type_name: "int".into(),
+            }],
+            rows: vec![
+                vec![sextant_core::CellValue::I64(1)],
+                vec![sextant_core::CellValue::I64(2)],
+            ],
+            rows_affected: None,
+        });
+
+        // Initial render sets the result.
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        assert_eq!(app.result_grid.cursor_row(), 0);
+
+        // Move down.
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('j'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.result_grid.cursor_row(), 1);
+
+        // Render again — cursor must NOT reset to 0.
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        assert_eq!(app.result_grid.cursor_row(), 1);
+    }
+
+    #[test]
+    fn grid_shows_active_cell_highlighted() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.focus = Focus::Grid;
+        app.last_result = Some(sextant_core::QueryResult {
+            columns: vec![
+                sextant_core::Column {
+                    name: "id".into(),
+                    type_name: "int".into(),
+                },
+                sextant_core::Column {
+                    name: "name".into(),
+                    type_name: "text".into(),
+                },
+            ],
+            rows: vec![
+                vec![sextant_core::CellValue::I64(1), sextant_core::CellValue::String("Alice".into())],
+                vec![sextant_core::CellValue::I64(2), sextant_core::CellValue::String("Bob".into())],
+            ],
+            rows_affected: None,
+        });
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        // Find the cell that contains "1" (first row, first col = active cell).
+        // With our layout, the grid starts at col 10 (sidebar is 25% of 40 = 10 cols).
+        // Row 0 is the first data row after the header.
+        // Header is row 0, first data row is row 1.
+        // Let's find the position of "1" in the buffer.
+        let mut found_one = false;
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                if buf[(x, y)].symbol() == "1" {
+                    let style = buf[(x, y)].style();
+                    assert_eq!(
+                        style.bg,
+                        Some(Color::Yellow),
+                        "active cell (0,0) should have Yellow bg, got {:?} at ({},{})",
+                        style.bg,
+                        x,
+                        y
+                    );
+                    found_one = true;
+                }
+            }
+        }
+        assert!(found_one, "should find cell value '1' in rendered grid");
     }
 }
