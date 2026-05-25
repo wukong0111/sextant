@@ -1,0 +1,27 @@
+# Example connections.toml for sextant.
+# Copy to ~/.config/sextant/connections.toml and adjust as needed.
+
+# Docker test containers (see compose.yml)
+[[connection]]
+name = "docker-pg"
+driver = "postgres"
+host = "127.0.0.1"
+port = 5433
+user = "sextant"
+database = "sextant_test"
+# Password read from SEXTANT_DOCKER_PG_PASSWORD env var
+
+[[connection]]
+name = "docker-mysql"
+driver = "mysql"
+host = "127.0.0.1"
+port = 3307
+user = "sextant"
+database = "sextant_test"
+# Password read from SEXTANT_DOCKER_MYSQL_PASSWORD env var
+
+# Local SQLite example
+[[connection]]
+name = "local-sqlite"
+driver = "sqlite"
+path = "~/scratch.db"

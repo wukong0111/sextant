@@ -118,6 +118,29 @@ make test-db-down    # stop and remove containers + volumes
 
 Containers use non-standard ports (5433, 3307) to avoid conflicts with local database instances.
 
+### Connecting the TUI to Docker databases
+
+1. Install the Docker test connection definitions:
+   ```bash
+   make setup-docker-conns
+   ```
+   This creates `~/.config/sextant/connections.toml` with entries for `docker-pg` and `docker-mysql`.
+
+2. Ensure the containers are running:
+   ```bash
+   make test-db-up
+   ```
+
+3. Start the TUI:
+   ```bash
+   cargo run
+   ```
+   The sidebar will show `docker-pg` and `docker-mysql`. Select one and press `Enter` to connect.
+
+4. Passwords are read from environment variables (already exported by the Makefile targets):
+   - `SEXTANT_DOCKER_PG_PASSWORD=sextant`
+   - `SEXTANT_DOCKER_MYSQL_PASSWORD=sextant`
+
 ### Verification Checklist
 
 Before declaring a task done:
