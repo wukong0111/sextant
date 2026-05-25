@@ -9,7 +9,7 @@ export SEXTANT_DOCKER_MYSQL_PASSWORD ?= sextant
 export SEXTANT_TEST_PG_URL ?= postgres://sextant:sextant@localhost:5433/sextant_test
 export SEXTANT_TEST_MYSQL_URL ?= mysql://sextant:sextant@localhost:3307/sextant_test
 
-.PHONY: test-db-up test-db-down test-integration test-db help
+.PHONY: test-db-up test-db-down test-integration test-db seed help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -28,6 +28,13 @@ test-integration: ## Run integration tests against Docker databases
 	cargo test --workspace
 
 test-db: test-db-up test-integration test-db-down ## Full cycle: start DBs, run tests, tear down
+
+seed: ## Seed Docker test databases with sample tables
+	@echo "Seeding PostgreSQL..."
+	@docker exec -i sextant-postgres-test psql -U sextant -d sextant_test -q < seeds/postgres.sql
+	@echo "Seeding MySQL..."
+	@docker exec -i sextant-mysql-test mysql -u sextant -psextant sextant_test < seeds/mysql.sql
+	@echo "Done."
 
 setup-docker-conns: ## Install Docker test connections to ~/.config/sextant/
 	@mkdir -p ~/.config/sextant
