@@ -11,7 +11,7 @@
 | Fase | Estado | Commit |
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
-| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes) |
+| Fase 1 — v0.1 MVP | 🚧 En progreso | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `PENDIENTE` (1.6 event loop) |
 | Fase 2 — v0.2 | ⬜ Pendiente | — |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
@@ -123,7 +123,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   - Ajuste de ancho de columna automático (max content o 40 chars).
   - Status line actualiza: `NOR │ local-pg │ 142 rows / 38ms │ <space>e`.
 
-### 1.6 Event Loop + Mensajes
+### 1.6 Event Loop + Mensajes ✅
 
 - Mensajes clave:
   ```rust

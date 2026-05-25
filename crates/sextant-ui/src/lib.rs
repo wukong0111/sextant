@@ -1,5 +1,9 @@
+use std::io::{self, stdout, Stdout};
+use std::time::{Duration, Instant};
+
+use futures::StreamExt;
 use ratatui::crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -12,7 +16,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use sextant_core::QueryExecutor;
-use std::io::{self, stdout, Stdout};
+use tokio::sync::mpsc::UnboundedSender;
 
 mod editor_modal;
 use editor_modal::{EditorAction, EditorModal};
@@ -22,6 +26,35 @@ use tree_pane::{ConnState, SchemaItem, TreePane};
 
 mod result_grid;
 use result_grid::ResultGrid;
+
+/// Messages that flow through the application event loop.
+#[derive(Debug)]
+pub enum AppMsg {
+    /// Request to connect to a named connection.
+    Connect(String),
+    /// Connection succeeded.
+    Connected {
+        name: String,
+        executor: sextant_db::SqlxExecutor,
+        schemas: Vec<sextant_db::introspection::Schema>,
+    },
+    /// Connection failed.
+    ConnectionFailed { name: String, error: String },
+    /// Disconnect the active connection.
+    Disconnect,
+    /// Execute a SQL statement.
+    ExecuteSql(String),
+    /// Query executed successfully.
+    QueryResult(sextant_core::QueryResult),
+    /// Query or connection error.
+    QueryError(String),
+    /// Toggle the SQL editor modal.
+    ToggleEditor,
+    /// A key event targeted at the editor.
+    EditorKey(KeyEvent),
+    /// Quit the application.
+    Quit,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -44,20 +77,6 @@ impl std::fmt::Display for Mode {
     }
 }
 
-enum AsyncResult {
-    Connected {
-        name: String,
-        executor: sextant_db::SqlxExecutor,
-        schemas: Vec<sextant_db::introspection::Schema>,
-    },
-    Failed {
-        name: String,
-        error: String,
-    },
-    QueryResult(sextant_core::QueryResult),
-    QueryError(String),
-}
-
 /// Application state for the TUI.
 pub struct App {
     pub mode: Mode,
@@ -65,9 +84,6 @@ pub struct App {
     should_quit: bool,
     tree: TreePane,
     connection_configs: Vec<sextant_core::Connection>,
-    runtime: tokio::runtime::Runtime,
-    async_rx: std::sync::mpsc::Receiver<AsyncResult>,
-    async_tx: std::sync::mpsc::Sender<AsyncResult>,
     executors: std::collections::HashMap<String, sextant_db::SqlxExecutor>,
     editor_open: bool,
     editor: EditorModal,
@@ -76,10 +92,11 @@ pub struct App {
     saved_buffers: std::collections::HashMap<String, String>,
     last_result: Option<sextant_core::QueryResult>,
     last_error: Option<String>,
-    last_query_duration: Option<std::time::Duration>,
-    query_start: Option<std::time::Instant>,
+    last_query_duration: Option<Duration>,
+    query_start: Option<Instant>,
     focus: Focus,
     result_grid: ResultGrid,
+    needs_redraw: bool,
 }
 
 impl App {
@@ -90,8 +107,6 @@ impl App {
         });
         let names: Vec<String> = connections.iter().map(|c| c.name.clone()).collect();
         let tree = TreePane::new(names);
-        let runtime = tokio::runtime::Runtime::new()?;
-        let (async_tx, async_rx) = std::sync::mpsc::channel();
 
         Ok(Self {
             mode: Mode::Normal,
@@ -99,9 +114,6 @@ impl App {
             should_quit: false,
             tree,
             connection_configs: connections,
-            runtime,
-            async_rx,
-            async_tx,
             executors: std::collections::HashMap::new(),
             editor_open: false,
             editor: EditorModal::new(),
@@ -114,6 +126,7 @@ impl App {
             query_start: None,
             focus: Focus::Tree,
             result_grid: ResultGrid::new(),
+            needs_redraw: true,
         })
     }
 
@@ -193,117 +206,118 @@ impl App {
         frame.render_widget(status_bar, outer[1]);
     }
 
-    fn draw(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
-        terminal.draw(|frame| self.render(frame))?;
-        Ok(())
-    }
+    fn handle_key_event(&mut self, key: KeyEvent, tx: &UnboundedSender<AppMsg>) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
 
-    fn handle_event(&mut self, event: Event) {
-        if let Event::Key(key) = event {
-            if key.kind != KeyEventKind::Press {
-                return;
+        tracing::debug!("key: {:?}, modifiers: {:?}", key.code, key.modifiers);
+
+        if self.editor_open {
+            let (new_mode, action) = self.editor.handle_key(key, self.mode);
+            tracing::debug!("editor action: {:?}, new_mode: {:?}", action, new_mode);
+            self.mode = new_mode;
+            match action {
+                EditorAction::Execute => self.run_editor_sql(tx),
+                EditorAction::Save => self.save_editor_buffer(),
+                EditorAction::Close => self.close_editor(),
+                EditorAction::None => {}
             }
+            return;
+        }
 
-            tracing::debug!("key: {:?}, modifiers: {:?}", key.code, key.modifiers);
-
-            if self.editor_open {
-                let (new_mode, action) = self.editor.handle_key(key, self.mode);
-                tracing::debug!("editor action: {:?}, new_mode: {:?}", action, new_mode);
-                self.mode = new_mode;
-                match action {
-                    EditorAction::Execute => self.run_editor_sql(),
-                    EditorAction::Save => self.save_editor_buffer(),
-                    EditorAction::Close => self.close_editor(),
-                    EditorAction::None => {}
-                }
-                return;
+        match key.code {
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.should_quit = true;
             }
-
-            match key.code {
-                KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.should_quit = true;
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    Focus::Tree => Focus::Grid,
+                    Focus::Grid => Focus::Tree,
+                };
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('j') if key.modifiers.is_empty() => {
+                match self.focus {
+                    Focus::Tree => self.tree.next(),
+                    Focus::Grid => self.result_grid.move_down(),
                 }
-                KeyCode::Tab => {
-                    self.focus = match self.focus {
-                        Focus::Tree => Focus::Grid,
-                        Focus::Grid => Focus::Tree,
-                    };
-                    self.pending_leader = false;
-                    self.pending_g = false;
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('k') if key.modifiers.is_empty() => {
+                match self.focus {
+                    Focus::Tree => self.tree.prev(),
+                    Focus::Grid => self.result_grid.move_up(),
                 }
-                KeyCode::Char('j') if key.modifiers.is_empty() => {
-                    match self.focus {
-                        Focus::Tree => self.tree.next(),
-                        Focus::Grid => self.result_grid.move_down(),
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('h') if key.modifiers.is_empty() => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.move_left();
+                }
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('l') if key.modifiers.is_empty() => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.move_right();
+                }
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('g') if key.modifiers.is_empty() => {
+                if self.focus == Focus::Grid {
+                    if self.pending_g {
+                        self.result_grid.top();
+                        self.pending_g = false;
+                    } else {
+                        self.pending_g = true;
                     }
-                    self.pending_leader = false;
-                    self.pending_g = false;
                 }
-                KeyCode::Char('k') if key.modifiers.is_empty() => {
-                    match self.focus {
-                        Focus::Tree => self.tree.prev(),
-                        Focus::Grid => self.result_grid.move_up(),
-                    }
-                    self.pending_leader = false;
-                    self.pending_g = false;
+                self.pending_leader = false;
+            }
+            KeyCode::Char('G') if key.modifiers.is_empty() => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.bottom();
                 }
-                KeyCode::Char('h') if key.modifiers.is_empty() => {
-                    if self.focus == Focus::Grid {
-                        self.result_grid.move_left();
-                    }
-                    self.pending_leader = false;
-                    self.pending_g = false;
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Enter => {
+                if self.focus == Focus::Tree {
+                    self.handle_enter(tx);
                 }
-                KeyCode::Char('l') if key.modifiers.is_empty() => {
-                    if self.focus == Focus::Grid {
-                        self.result_grid.move_right();
-                    }
-                    self.pending_leader = false;
-                    self.pending_g = false;
-                }
-                KeyCode::Char('g') if key.modifiers.is_empty() => {
-                    if self.focus == Focus::Grid {
-                        if self.pending_g {
-                            self.result_grid.top();
-                            self.pending_g = false;
-                        } else {
-                            self.pending_g = true;
-                        }
-                    }
-                    self.pending_leader = false;
-                }
-                KeyCode::Char('G') if key.modifiers.is_empty() => {
-                    if self.focus == Focus::Grid {
-                        self.result_grid.bottom();
-                    }
-                    self.pending_leader = false;
-                    self.pending_g = false;
-                }
-                KeyCode::Enter => {
-                    if self.focus == Focus::Tree {
-                        self.handle_enter();
-                    }
-                    self.pending_leader = false;
-                    self.pending_g = false;
-                }
-                KeyCode::Char(' ') => {
-                    self.pending_leader = true;
-                    self.pending_g = false;
-                }
-                KeyCode::Char('e') if self.pending_leader => {
-                    self.open_editor();
-                    self.pending_leader = false;
-                    self.pending_g = false;
-                }
-                _ => {
-                    self.pending_leader = false;
-                    self.pending_g = false;
-                }
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char(' ') => {
+                self.pending_leader = true;
+                self.pending_g = false;
+            }
+            KeyCode::Char('e') if self.pending_leader => {
+                self.open_editor();
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            _ => {
+                self.pending_leader = false;
+                self.pending_g = false;
             }
         }
     }
 
-    fn handle_enter(&mut self) {
+    #[cfg(test)]
+    fn handle_event(&mut self, event: Event) {
+        if let Event::Key(key) = event {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            self.handle_key_event(key, &tx);
+        }
+    }
+
+    fn handle_enter(&mut self, tx: &UnboundedSender<AppMsg>) {
         let Some(kind) = self.tree.selected_kind() else { return };
 
         match kind {
@@ -313,7 +327,7 @@ impl App {
                 match state {
                     ConnState::Disconnected | ConnState::Error(_) => {
                         let name = self.tree.connections[conn_idx].name.clone();
-                        self.start_connection(&name, conn_idx);
+                        self.start_connection(&name, conn_idx, tx);
                     }
                     ConnState::Connected { .. } => {
                         self.tree.toggle_selected();
@@ -330,7 +344,7 @@ impl App {
         }
     }
 
-    fn start_connection(&mut self, name: &str, conn_idx: usize) {
+    fn start_connection(&mut self, name: &str, conn_idx: usize, tx: &UnboundedSender<AppMsg>) {
         let Some(config) = self.connection_configs.iter().find(|c| c.name == name) else {
             return;
         };
@@ -340,10 +354,10 @@ impl App {
 
         let password = sextant_config::connection_password(name);
         let config = config.clone();
-        let tx = self.async_tx.clone();
+        let tx = tx.clone();
         let name = name.to_string();
 
-        self.runtime.spawn(async move {
+        tokio::spawn(async move {
             let mut mgr = sextant_db::ConnectionManager::new();
             match mgr.connect(&name, &config, password.as_deref()).await {
                 Ok(executor) => {
@@ -354,14 +368,14 @@ impl App {
                     .await
                     {
                         Ok(schemas) => {
-                            let _ = tx.send(AsyncResult::Connected {
+                            let _ = tx.send(AppMsg::Connected {
                                 name,
                                 executor,
                                 schemas,
                             });
                         }
                         Err(e) => {
-                            let _ = tx.send(AsyncResult::Failed {
+                            let _ = tx.send(AppMsg::ConnectionFailed {
                                 name,
                                 error: format!("{e}"),
                             });
@@ -369,7 +383,7 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(AsyncResult::Failed {
+                    let _ = tx.send(AppMsg::ConnectionFailed {
                         name,
                         error: format!("{e}"),
                     });
@@ -378,47 +392,49 @@ impl App {
         });
     }
 
-    fn handle_async_results(&mut self) {
-        while let Ok(result) = self.async_rx.try_recv() {
-            match result {
-                AsyncResult::Connected {
-                    name,
-                    executor,
-                    schemas,
-                } => {
-                    let schema_items = schemas
-                        .into_iter()
-                        .map(|s| SchemaItem {
-                            name: s.name,
-                            expanded: true,
-                            tables: s.tables,
-                        })
-                        .collect();
+    fn handle_msg(&mut self, msg: AppMsg) {
+        match msg {
+            AppMsg::Connected {
+                name,
+                executor,
+                schemas,
+            } => {
+                let schema_items = schemas
+                    .into_iter()
+                    .map(|s| SchemaItem {
+                        name: s.name,
+                        expanded: true,
+                        tables: s.tables,
+                    })
+                    .collect();
 
-                    if let Some(idx) = self.tree.connection_index_by_name(&name) {
-                        self.tree.set_connected(idx, schema_items);
-                    }
-                    self.executors.insert(name.clone(), executor);
-                    self.connection_name = Some(name);
+                if let Some(idx) = self.tree.connection_index_by_name(&name) {
+                    self.tree.set_connected(idx, schema_items);
                 }
-                AsyncResult::Failed { name, error } => {
-                    if let Some(idx) = self.tree.connection_index_by_name(&name) {
-                        self.tree.set_error(idx, error.clone());
-                    }
-                    self.connection_name = Some(format!("{name}: {error}"));
-                }
-                AsyncResult::QueryResult(result) => {
-                    let rows = result.rows.len();
-                    self.last_result = Some(result);
-                    self.last_error = None;
-                    self.last_query_duration = self.query_start.take().map(|t| t.elapsed());
-                    tracing::info!("query returned {} rows", rows);
-                }
-                AsyncResult::QueryError(error) => {
-                    tracing::warn!("query error: {}", error);
-                    self.last_error = Some(error);
-                }
+                self.executors.insert(name.clone(), executor);
+                self.connection_name = Some(name);
             }
+            AppMsg::ConnectionFailed { name, error } => {
+                if let Some(idx) = self.tree.connection_index_by_name(&name) {
+                    self.tree.set_error(idx, error.clone());
+                }
+                self.connection_name = Some(format!("{name}: {error}"));
+            }
+            AppMsg::QueryResult(result) => {
+                let rows = result.rows.len();
+                self.last_result = Some(result);
+                self.last_error = None;
+                self.last_query_duration = self.query_start.take().map(|t| t.elapsed());
+                tracing::info!("query returned {} rows", rows);
+            }
+            AppMsg::QueryError(error) => {
+                tracing::warn!("query error: {}", error);
+                self.last_error = Some(error);
+            }
+            AppMsg::Quit => {
+                self.should_quit = true;
+            }
+            _ => {}
         }
     }
 
@@ -445,7 +461,7 @@ impl App {
         }
     }
 
-    fn run_editor_sql(&mut self) {
+    fn run_editor_sql(&mut self, tx: &UnboundedSender<AppMsg>) {
         let sql = self.editor.content();
         tracing::info!("run_editor_sql: sql='{}'", sql.trim());
         let Some(name) = self.connection_name.clone() else {
@@ -461,16 +477,16 @@ impl App {
             );
             return;
         };
-        self.query_start = Some(std::time::Instant::now());
-        let tx = self.async_tx.clone();
+        self.query_start = Some(Instant::now());
+        let tx = tx.clone();
         tracing::info!("run_editor_sql: spawning query");
-        self.runtime.spawn(async move {
+        tokio::spawn(async move {
             match executor.execute(&sql).await {
                 Ok(result) => {
-                    let _ = tx.send(AsyncResult::QueryResult(result));
+                    let _ = tx.send(AppMsg::QueryResult(result));
                 }
                 Err(e) => {
-                    let _ = tx.send(AsyncResult::QueryError(format!("{e}")));
+                    let _ = tx.send(AppMsg::QueryError(format!("{e}")));
                 }
             }
         });
@@ -479,28 +495,60 @@ impl App {
 
 /// Run the TUI event loop until the user quits.
 pub fn run() -> io::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(run_async())
+}
+
+async fn run_async() -> io::Result<()> {
     let mut terminal = setup_terminal()?;
     let mut app = App::new()?;
 
-    let result = (|| -> io::Result<()> {
-        loop {
-            app.handle_async_results();
-            app.draw(&mut terminal)?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppMsg>();
+    let mut event_stream = crossterm::event::EventStream::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(250));
 
-            if event::poll(std::time::Duration::from_millis(16))? {
-                let event = event::read()?;
-                app.handle_event(event);
+    loop {
+        if app.needs_redraw {
+            terminal.draw(|frame| app.render(frame))?;
+            app.needs_redraw = false;
+        }
+
+        tokio::select! {
+            biased;
+            maybe_event = event_stream.next() => {
+                match maybe_event {
+                    Some(Ok(Event::Key(key))) => {
+                        app.handle_key_event(key, &tx);
+                        app.needs_redraw = true;
+                    }
+                    Some(Ok(Event::Resize(_, _))) => {
+                        app.needs_redraw = true;
+                    }
+                    Some(Ok(_)) => {
+                        // Ignore FocusGained, FocusLost, Mouse, Paste, etc.
+                    }
+                    Some(Err(_)) => break,
+                    None => break,
+                }
             }
-
-            if app.should_quit {
-                break;
+            Some(msg) = rx.recv() => {
+                app.handle_msg(msg);
+                app.needs_redraw = true;
+            }
+            _ = tick.tick() => {
+                if app.editor_open {
+                    app.needs_redraw = true;
+                }
             }
         }
-        Ok(())
-    })();
+
+        if app.should_quit {
+            break;
+        }
+    }
 
     restore_terminal(&mut terminal)?;
-    result
+    Ok(())
 }
 
 fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
@@ -880,7 +928,7 @@ mod tests {
             rows: vec![vec![sextant_core::CellValue::I64(1)]],
             rows_affected: None,
         });
-        app.last_query_duration = Some(std::time::Duration::from_millis(38));
+        app.last_query_duration = Some(Duration::from_millis(38));
 
         terminal.draw(|frame| app.render(frame)).unwrap();
 
