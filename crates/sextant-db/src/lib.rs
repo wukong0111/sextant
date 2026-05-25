@@ -12,6 +12,7 @@ pub use url_builder::build_connection_url;
 #[cfg(test)]
 mod tests {
     use sextant_core::{CellValue, Driver, QueryExecutor};
+    use sqlx::Row;
 
     use super::*;
 
@@ -126,6 +127,47 @@ mod tests {
         assert!(result.columns.is_empty());
     }
 
+    async fn cleanup_pg_schema(exec: &SqlxExecutor) {
+        let DbPool::Postgres(pool) = exec.pool() else { return };
+        let rows = sqlx::query::<sqlx::Postgres>(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+
+        for row in rows {
+            let name: String = row.try_get(0usize).unwrap();
+            let sql = format!("DROP TABLE IF EXISTS \"public\".\"{}\" CASCADE", name);
+            let _ = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await;
+        }
+    }
+
+    async fn cleanup_mysql_schema(exec: &SqlxExecutor) {
+        let DbPool::MySql(pool) = exec.pool() else { return };
+        let _ = sqlx::query::<sqlx::MySql>("SET FOREIGN_KEY_CHECKS = 0")
+            .execute(pool)
+            .await;
+
+        let rows = sqlx::query::<sqlx::MySql>(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = 'sextant_test' AND table_type = 'BASE TABLE'",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+
+        for row in rows {
+            let name: String = row.try_get(0usize).unwrap();
+            let sql = format!("DROP TABLE IF EXISTS `{}`", name);
+            let _ = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await;
+        }
+
+        let _ = sqlx::query::<sqlx::MySql>("SET FOREIGN_KEY_CHECKS = 1")
+            .execute(pool)
+            .await;
+    }
+
     #[tokio::test]
     async fn postgresql_integration() {
         let url = std::env::var("SEXTANT_TEST_PG_URL").unwrap_or_default();
@@ -136,8 +178,8 @@ mod tests {
         let pool = sqlx::PgPool::connect(&url).await.unwrap();
         let exec = SqlxExecutor::new(DbPool::Postgres(pool));
 
-        // Clean up from any previous failed run.
-        let _ = exec.execute("DROP TABLE IF EXISTS pg_test").await;
+        // Start from a clean schema.
+        cleanup_pg_schema(&exec).await;
 
         exec.execute("CREATE TABLE pg_test (id INT PRIMARY KEY, label TEXT, amount NUMERIC)")
             .await
@@ -169,8 +211,8 @@ mod tests {
         let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
         let exec = SqlxExecutor::new(DbPool::MySql(pool));
 
-        // Clean up from any previous failed run.
-        let _ = exec.execute("DROP TABLE IF EXISTS mysql_test").await;
+        // Start from a clean schema.
+        cleanup_mysql_schema(&exec).await;
 
         exec.execute("CREATE TABLE mysql_test (id INT PRIMARY KEY, label VARCHAR(100), amount DECIMAL(10,2), created_at DATETIME, payload JSON)")
             .await
@@ -211,7 +253,7 @@ mod tests {
         let pool = sqlx::PgPool::connect(&url).await.unwrap();
         let exec = SqlxExecutor::new(DbPool::Postgres(pool));
 
-        let _ = exec.execute("DROP TABLE IF EXISTS pg_introspect_test").await;
+        cleanup_pg_schema(&exec).await;
         exec.execute("CREATE TABLE pg_introspect_test (id INT PRIMARY KEY)")
             .await
             .unwrap();
@@ -239,7 +281,7 @@ mod tests {
         let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
         let exec = SqlxExecutor::new(DbPool::MySql(pool));
 
-        let _ = exec.execute("DROP TABLE IF EXISTS mysql_introspect_test").await;
+        cleanup_mysql_schema(&exec).await;
         exec.execute("CREATE TABLE mysql_introspect_test (id INT PRIMARY KEY)")
             .await
             .unwrap();
