@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18.4-alpine
+    image: postgres:18.4
     container_name: sextant-postgres-test
     environment:
       POSTGRES_USER: sextant
