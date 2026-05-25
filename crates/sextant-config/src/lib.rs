@@ -32,12 +32,12 @@ pub fn load_connections_from(path: impl AsRef<Path>) -> Result<Vec<Connection>, 
 /// Read the password for a connection from the environment.
 ///
 /// Looks up `SEXTANT_<NAME>_PASSWORD` where `<NAME>` is the connection name
-/// uppercased with spaces replaced by underscores.
+/// uppercased with spaces and hyphens replaced by underscores.
 ///
 /// This is the v0.1 fallback; keyring integration is planned for a later
 /// phase.
 pub fn connection_password(name: &str) -> Option<String> {
-    let key = name.to_uppercase().replace(' ', "_");
+    let key = name.to_uppercase().replace([' ', '-'], "_");
     let key = format!("SEXTANT_{key}_PASSWORD");
     std::env::var(key).ok()
 }
@@ -147,9 +147,9 @@ driver = "oracle"
     #[test]
     fn connection_password_from_env() {
         // Sequential assertions to avoid races with other env-modifying tests.
-        unsafe { std::env::set_var("SEXTANT_LOCAL-PG_PASSWORD", "secret123") };
+        unsafe { std::env::set_var("SEXTANT_LOCAL_PG_PASSWORD", "secret123") };
         assert_eq!(connection_password("local-pg"), Some("secret123".to_string()));
-        unsafe { std::env::remove_var("SEXTANT_LOCAL-PG_PASSWORD") };
+        unsafe { std::env::remove_var("SEXTANT_LOCAL_PG_PASSWORD") };
         assert_eq!(connection_password("local-pg"), None);
 
         unsafe { std::env::set_var("SEXTANT_PROD_DB_PASSWORD", "hunter2") };

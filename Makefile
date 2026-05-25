@@ -31,8 +31,8 @@ test-db: test-db-up test-integration test-db-down ## Full cycle: start DBs, run 
 
 setup-docker-conns: ## Install Docker test connections to ~/.config/sextant/
 	@mkdir -p ~/.config/sextant
-	@sed -n '/# Docker test containers/,/# Local SQLite example/p' connections.example.toml | grep -v "# Local SQLite example" > ~/.config/sextant/connections.toml
-	@echo "Installed Docker connections to ~/.config/sextant/connections.toml"
+	@cp connections.example.toml ~/.config/sextant/connections.toml
+	@echo "Installed connections to ~/.config/sextant/connections.toml"
 	@echo "Set passwords with:"
 	@echo "  export SEXTANT_DOCKER_PG_PASSWORD=sextant"
 	@echo "  export SEXTANT_DOCKER_MYSQL_PASSWORD=sextant"
