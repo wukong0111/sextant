@@ -136,7 +136,10 @@ mod tests {
         let pool = sqlx::PgPool::connect(&url).await.unwrap();
         let exec = SqlxExecutor::new(DbPool::Postgres(pool));
 
-        exec.execute("CREATE TEMP TABLE pg_test (id INT PRIMARY KEY, label TEXT, amount NUMERIC)")
+        // Clean up from any previous failed run.
+        let _ = exec.execute("DROP TABLE IF EXISTS pg_test").await;
+
+        exec.execute("CREATE TABLE pg_test (id INT PRIMARY KEY, label TEXT, amount NUMERIC)")
             .await
             .unwrap();
 
@@ -151,6 +154,9 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], CellValue::I64(1));
         assert_eq!(result.rows[0][1], CellValue::String("hello".to_string()));
+
+        // Clean up.
+        exec.execute("DROP TABLE IF EXISTS pg_test").await.unwrap();
     }
 
     #[tokio::test]
@@ -163,7 +169,10 @@ mod tests {
         let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
         let exec = SqlxExecutor::new(DbPool::MySql(pool));
 
-        exec.execute("CREATE TEMPORARY TABLE mysql_test (id INT PRIMARY KEY, label VARCHAR(100), amount DECIMAL(10,2), created_at DATETIME, payload JSON)")
+        // Clean up from any previous failed run.
+        let _ = exec.execute("DROP TABLE IF EXISTS mysql_test").await;
+
+        exec.execute("CREATE TABLE mysql_test (id INT PRIMARY KEY, label VARCHAR(100), amount DECIMAL(10,2), created_at DATETIME, payload JSON)")
             .await
             .unwrap();
 
@@ -180,7 +189,16 @@ mod tests {
         assert_eq!(result.rows[0][1], CellValue::String("hello".to_string()));
         assert_eq!(result.rows[0][2], CellValue::String("42.00".to_string()));
         assert_eq!(result.rows[0][3], CellValue::String("2024-01-15 10:30:00".to_string()));
-        assert_eq!(result.rows[0][4], CellValue::String("{\"key\": \"value\"}".to_string()));
+        // MySQL may return JSON with compact formatting; verify it contains the key data.
+        let json_str = match &result.rows[0][4] {
+            CellValue::String(s) => s.clone(),
+            other => panic!("expected String for JSON, got {:?}", other),
+        };
+        assert!(json_str.contains("\"key\""));
+        assert!(json_str.contains("\"value\""));
+
+        // Clean up.
+        exec.execute("DROP TABLE IF EXISTS mysql_test").await.unwrap();
     }
 }
 

@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sextant-postgres-test
+    environment:
+      POSTGRES_USER: sextant
+      POSTGRES_PASSWORD: sextant
+      POSTGRES_DB: sextant_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - sextant-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sextant -d sextant_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  mysql:
+    image: mysql:8
+    container_name: sextant-mysql-test
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: sextant
+      MYSQL_PASSWORD: sextant
+      MYSQL_DATABASE: sextant_test
+    ports:
+      - "3307:3306"
+    volumes:
+      - sextant-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "sextant", "-psextant"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  sextant-postgres-data:
+  sextant-mysql-data:

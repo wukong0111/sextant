@@ -13,5 +13,5 @@ license = "MIT"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 dirs = "6"
-sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "mysql", "sqlite"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "mysql", "sqlite", "chrono", "json", "rust_decimal", "bigdecimal"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

@@ -1,7 +1,7 @@
 //! SQL query executor backed by sqlx.
 
 use sextant_core::{CellValue, Column, QueryExecutor, QueryResult, SextantError};
-use sqlx::{Column as _, Database, Decode, Row, Type, TypeInfo};
+use sqlx::{Column as _, Database, Row, TypeInfo};
 
 /// A pooled database connection.
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ impl QueryExecutor for SqlxExecutor {
                 }
 
                 let columns = extract_columns(&rows[0]);
-                let data = rows.iter().map(|r| map_row(r)).collect::<Result<_, _>>()?;
+                let data = rows.iter().map(map_pg_row).collect::<Result<_, _>>()?;
 
                 Ok(QueryResult {
                     columns,
@@ -85,7 +85,7 @@ impl QueryExecutor for SqlxExecutor {
                 }
 
                 let columns = extract_columns(&rows[0]);
-                let data = rows.iter().map(|r| map_row(r)).collect::<Result<_, _>>()?;
+                let data = rows.iter().map(map_mysql_row).collect::<Result<_, _>>()?;
 
                 Ok(QueryResult {
                     columns,
@@ -120,7 +120,7 @@ impl QueryExecutor for SqlxExecutor {
                 }
 
                 let columns = extract_columns(&rows[0]);
-                let data = rows.iter().map(|r| map_row(r)).collect::<Result<_, _>>()?;
+                let data = rows.iter().map(map_sqlite_row).collect::<Result<_, _>>()?;
 
                 Ok(QueryResult {
                     columns,
@@ -167,41 +167,137 @@ where
         .collect()
 }
 
-fn map_row<R>(row: &R) -> Result<Vec<CellValue>, SextantError>
-where
-    R: Row,
-    <R::Database as Database>::TypeInfo: TypeInfo,
-    usize: sqlx::ColumnIndex<R>,
-    for<'a> bool: Decode<'a, R::Database> + Type<R::Database>,
-    for<'a> i64: Decode<'a, R::Database> + Type<R::Database>,
-    for<'a> f64: Decode<'a, R::Database> + Type<R::Database>,
-    for<'a> String: Decode<'a, R::Database> + Type<R::Database>,
-    for<'a> Vec<u8>: Decode<'a, R::Database> + Type<R::Database>,
-{
+// ---------------------------------------------------------------------------
+// PostgreSQL row mapping
+// ---------------------------------------------------------------------------
+
+fn map_pg_row(row: &sqlx::postgres::PgRow) -> Result<Vec<CellValue>, SextantError> {
     let mut out = Vec::with_capacity(row.columns().len());
     for i in 0..row.columns().len() {
         let type_name = row.columns()[i].type_info().name();
-        out.push(map_cell(row, i, type_name)?);
+        out.push(map_pg_cell(row, i, type_name)?);
     }
     Ok(out)
 }
 
-fn map_cell<R>(row: &R, idx: usize, type_name: &str) -> Result<CellValue, SextantError>
-where
-    R: Row,
-    usize: sqlx::ColumnIndex<R>,
-    for<'a> bool: Decode<'a, R::Database> + Type<R::Database>,
-    for<'a> i64: Decode<'a, R::Database> + Type<R::Database>,
-    for<'a> f64: Decode<'a, R::Database> + Type<R::Database>,
-    for<'a> String: Decode<'a, R::Database> + Type<R::Database>,
-    for<'a> Vec<u8>: Decode<'a, R::Database> + Type<R::Database>,
-{
+fn map_pg_cell(
+    row: &sqlx::postgres::PgRow,
+    idx: usize,
+    type_name: &str,
+) -> Result<CellValue, SextantError> {
     let is_bool_type = type_name.to_ascii_lowercase().contains("bool");
 
     if is_bool_type {
         if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
             return Ok(v.map_or(CellValue::Null, CellValue::Bool));
         }
+    }
+    if let Ok(v) = row.try_get::<Option<i32>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::I64(i64::from(v))));
+    }
+    if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, CellValue::I64));
+    }
+    if let Ok(v) = row.try_get::<Option<f64>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, CellValue::F64));
+    }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::BigDecimal>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::JsonValue>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, CellValue::String));
+    }
+    if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, CellValue::Bytes));
+    }
+    Ok(CellValue::Null)
+}
+
+// ---------------------------------------------------------------------------
+// MySQL row mapping
+// ---------------------------------------------------------------------------
+
+fn map_mysql_row(row: &sqlx::mysql::MySqlRow) -> Result<Vec<CellValue>, SextantError> {
+    let mut out = Vec::with_capacity(row.columns().len());
+    for i in 0..row.columns().len() {
+        let type_name = row.columns()[i].type_info().name();
+        out.push(map_mysql_cell(row, i, type_name)?);
+    }
+    Ok(out)
+}
+
+fn map_mysql_cell(
+    row: &sqlx::mysql::MySqlRow,
+    idx: usize,
+    type_name: &str,
+) -> Result<CellValue, SextantError> {
+    let is_bool_type = type_name.to_ascii_lowercase().contains("bool");
+
+    if is_bool_type {
+        if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
+            return Ok(v.map_or(CellValue::Null, CellValue::Bool));
+        }
+    }
+    if let Ok(v) = row.try_get::<Option<i32>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::I64(i64::from(v))));
+    }
+    if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, CellValue::I64));
+    }
+    if let Ok(v) = row.try_get::<Option<f64>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, CellValue::F64));
+    }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::Decimal>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::JsonValue>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, CellValue::String));
+    }
+    if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, CellValue::Bytes));
+    }
+    Ok(CellValue::Null)
+}
+
+// ---------------------------------------------------------------------------
+// SQLite row mapping
+// ---------------------------------------------------------------------------
+
+fn map_sqlite_row(row: &sqlx::sqlite::SqliteRow) -> Result<Vec<CellValue>, SextantError> {
+    let mut out = Vec::with_capacity(row.columns().len());
+    for i in 0..row.columns().len() {
+        let type_name = row.columns()[i].type_info().name();
+        out.push(map_sqlite_cell(row, i, type_name)?);
+    }
+    Ok(out)
+}
+
+fn map_sqlite_cell(
+    row: &sqlx::sqlite::SqliteRow,
+    idx: usize,
+    type_name: &str,
+) -> Result<CellValue, SextantError> {
+    let is_bool_type = type_name.to_ascii_lowercase().contains("bool");
+
+    if is_bool_type {
+        if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
+            return Ok(v.map_or(CellValue::Null, CellValue::Bool));
+        }
+    }
+    if let Ok(v) = row.try_get::<Option<i32>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::I64(i64::from(v))));
     }
     if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
         return Ok(v.map_or(CellValue::Null, CellValue::I64));

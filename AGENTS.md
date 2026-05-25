@@ -98,6 +98,26 @@ The binary opens a TUI window. In the current Phase 0 implementation it shows a 
 - TUI integration tests can use `screen` to create a pseudo-tty, send `\x11` (`Ctrl+Q`), and verify exit code 0.
 - Database tests should use temporary SQLite files or test containers for PG/MySQL.
 
+### Integration Tests with Docker
+
+A `compose.yml` provides PostgreSQL and MySQL test containers. Requirements: Docker + Docker Compose v2.
+
+```bash
+# Full cycle: start containers, run tests, tear down
+make test-db
+
+# Or step by step:
+make test-db-up      # start containers and wait for readiness
+make test-integration # run cargo test --workspace against Docker DBs
+make test-db-down    # stop and remove containers + volumes
+```
+
+**Default connection URLs** (can be overridden via environment):
+- PostgreSQL: `postgres://sextant:sextant@localhost:5433/sextant_test`
+- MySQL: `mysql://sextant:sextant@localhost:3307/sextant_test`
+
+Containers use non-standard ports (5433, 3307) to avoid conflicts with local database instances.
+
 ### Verification Checklist
 
 Before declaring a task done:
