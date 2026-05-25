@@ -11,7 +11,7 @@
 | Fase | Estado | Commit |
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
-| Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor) |
+| Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `53945b2` (fix SQLite BOOLEAN) |
 | Fase 2 — v0.2 | ⬜ Pendiente | — |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
@@ -88,11 +88,12 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 ### 1.2 Capa de Drivers (`sextant-db`) ✅ (`6dfb9cf`)
 
 - Dependencias: `sqlx` con features `runtime-tokio`, `postgres`, `sqlite`.
-- `struct SqlxExecutor { pool: Pool<Any> }` (usa `Any` para unificar PG y SQLite).
+- `struct SqlxExecutor { pool: DbPool }` donde `DbPool` es un enum con variantes tipadas (`PgPool`, `SqlitePool`).
+  - Decisión técnica: `sqlx::Any` no soporta el tipo `BOOLEAN` de SQLite (`SqliteTypeInfo(Bool)`), lo que hacía fallar `fetch_all` directamente. Usar pools tipados por backend resuelve el problema y prepara el terreno para MySQL en Fase 2.
 - Implementar `QueryExecutor` para `SqlxExecutor`:
-  - Mapear `sqlx::any::AnyRow` → `Vec<CellValue>` según el tipo SQL.
+  - Mapear filas según el tipo SQL, con fallback ordenado: `bool` (solo si `type_info` indica booleano) → `i64` → `f64` → `String` → `Bytes`.
   - Soportar `SELECT` (devuelve `QueryResult`) y comandos DDL/DML (devuelve `QueryResult` vacío con `rows_affected`).
-- **Pool por conexión activa**: `HashMap<String, Pool<Any>>` manejado por un `ConnectionManager`.
+- **Pool por conexión activa**: `HashMap<String, DbPool>` manejado por un `ConnectionManager`.
 
 ### 1.3 Árbol de Conexiones (sidebar) ✅
 
@@ -322,6 +323,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 ## Notas de Implementación
 
 - **Rendimiento**: el grid read-only de v0.1 puede cargar todo en memoria porque `ratatui::Table` requiere todas las filas. Para v0.2+, considerar virtualización (renderizar solo filas visibles) si hay tablas >10k rows.
-- **SQLx `Any` driver**: simplifica mucho el código unificado, pero hay que verificar que soporta bien los tipos de los 3 backends. Si hay problemas (ej. JSON en SQLite vs PG), caer a pools tipados por driver con enum wrapper.
+- ~~**SQLx `Any` driver**: simplifica mucho el código unificado, pero hay que verificar que soporta bien los tipos de los 3 backends. Si hay problemas (ej. JSON en SQLite vs PG), caer a pools tipados por driver con enum wrapper.~~
+  - **Actualizado (post-Fase 1)**: Se migró directamente a pools tipados (`DbPool` enum) porque `Any` falla con `BOOLEAN` en SQLite. El código ahora usa `PgPool`/`SqlitePool` directamente, eliminando `AnyPool` y `install_drivers`.
 - **Editor propio vs `tui-textarea`**: `tui-textarea` acelera v0.1 pero no soporta syntax highlighting nativo. La migración a editor propio es necesaria en v0.2. Valorar si conviene invertir directamente en el editor propio desde v0.1 para evitar la migración.
 - **Recursión en event loop**: usar `mpsc::UnboundedChannel` para evitar backpressure; el render corre en el thread principal, el trabajo pesado en `tokio` tasks.

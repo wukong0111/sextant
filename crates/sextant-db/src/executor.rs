@@ -1,77 +1,109 @@
 //! SQL query executor backed by sqlx.
 
 use sextant_core::{CellValue, Column, QueryExecutor, QueryResult, SextantError};
-use sqlx::{AnyPool, AssertSqlSafe, Column as _, Row, TypeInfo as _};
+use sqlx::{Column as _, Database, Decode, Row, Type, TypeInfo};
+
+/// A pooled database connection.
+#[derive(Debug, Clone)]
+pub enum DbPool {
+    Postgres(sqlx::PgPool),
+    Sqlite(sqlx::SqlitePool),
+}
 
 /// An async query executor using a sqlx connection pool.
 #[derive(Debug, Clone)]
 pub struct SqlxExecutor {
-    pool: AnyPool,
+    pool: DbPool,
 }
 
 impl SqlxExecutor {
-    /// Wrap an existing sqlx pool.
-    pub fn new(pool: AnyPool) -> Self {
+    /// Wrap an existing pool.
+    pub fn new(pool: DbPool) -> Self {
         Self { pool }
     }
 
-    /// Access the underlying pool.
-    pub fn pool(&self) -> &AnyPool {
+    /// Access the underlying pool (crate-private).
+    pub(crate) fn pool(&self) -> &DbPool {
         &self.pool
-    }
-
-    /// Create a new pool from a connection URL.
-    pub async fn connect(url: &str) -> Result<Self, SextantError> {
-        install_drivers();
-        let pool = AnyPool::connect(url)
-            .await
-            .map_err(|e| SextantError::Database(format!("failed to connect: {e}")))?;
-        Ok(Self::new(pool))
     }
 }
 
 impl QueryExecutor for SqlxExecutor {
     async fn execute(&self, sql: &str) -> Result<QueryResult, SextantError> {
-        let sql = sql.to_string();
         let trimmed = sql.trim_start();
         let is_select = is_select_query(trimmed);
 
-        if is_select {
-            let rows = sqlx::query(AssertSqlSafe(sql.clone()))
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
+        match (&self.pool, is_select) {
+            (DbPool::Postgres(pool), true) => {
+                let rows = sqlx::query::<sqlx::Postgres>(sqlx::AssertSqlSafe(sql))
+                    .fetch_all(pool)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
 
-            if rows.is_empty() {
-                return Ok(QueryResult {
+                if rows.is_empty() {
+                    return Ok(QueryResult {
+                        columns: vec![],
+                        rows: vec![],
+                        rows_affected: None,
+                    });
+                }
+
+                let columns = extract_columns(&rows[0]);
+                let data = rows.iter().map(|r| map_row(r)).collect::<Result<_, _>>()?;
+
+                Ok(QueryResult {
+                    columns,
+                    rows: data,
+                    rows_affected: None,
+                })
+            }
+            (DbPool::Postgres(pool), false) => {
+                let result = sqlx::query::<sqlx::Postgres>(sqlx::AssertSqlSafe(sql))
+                    .execute(pool)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
+
+                Ok(QueryResult {
                     columns: vec![],
                     rows: vec![],
-                    rows_affected: None,
-                });
+                    rows_affected: Some(result.rows_affected()),
+                })
             }
+            (DbPool::Sqlite(pool), true) => {
+                let rows = sqlx::query::<sqlx::Sqlite>(sqlx::AssertSqlSafe(sql))
+                    .fetch_all(pool)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
 
-            let columns = extract_columns(&rows[0]);
-            let data: Vec<Vec<CellValue>> = rows
-                .iter()
-                .map(|r| map_row(r))
-                .collect::<Result<_, _>>()?;
+                if rows.is_empty() {
+                    return Ok(QueryResult {
+                        columns: vec![],
+                        rows: vec![],
+                        rows_affected: None,
+                    });
+                }
 
-            Ok(QueryResult {
-                columns,
-                rows: data,
-                rows_affected: None,
-            })
-        } else {
-            let result = sqlx::query(AssertSqlSafe(sql.clone()))
-                .execute(&self.pool)
-                .await
-                .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
+                let columns = extract_columns(&rows[0]);
+                let data = rows.iter().map(|r| map_row(r)).collect::<Result<_, _>>()?;
 
-            Ok(QueryResult {
-                columns: vec![],
-                rows: vec![],
-                rows_affected: Some(result.rows_affected()),
-            })
+                Ok(QueryResult {
+                    columns,
+                    rows: data,
+                    rows_affected: None,
+                })
+            }
+            (DbPool::Sqlite(pool), false) => {
+                let result = sqlx::query::<sqlx::Sqlite>(sqlx::AssertSqlSafe(sql))
+                    .execute(pool)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("query failed: {e}")))?;
+
+                Ok(QueryResult {
+                    columns: vec![],
+                    rows: vec![],
+                    rows_affected: Some(result.rows_affected()),
+                })
+            }
         }
     }
 }
@@ -85,7 +117,11 @@ fn is_select_query(sql: &str) -> bool {
         || upper.starts_with("VALUES")
 }
 
-fn extract_columns(row: &sqlx::any::AnyRow) -> Vec<Column> {
+fn extract_columns<R>(row: &R) -> Vec<Column>
+where
+    R: Row,
+    <R::Database as Database>::TypeInfo: TypeInfo,
+{
     row.columns()
         .iter()
         .map(|c| Column {
@@ -95,22 +131,41 @@ fn extract_columns(row: &sqlx::any::AnyRow) -> Vec<Column> {
         .collect()
 }
 
-fn map_row(row: &sqlx::any::AnyRow) -> Result<Vec<CellValue>, SextantError> {
+fn map_row<R>(row: &R) -> Result<Vec<CellValue>, SextantError>
+where
+    R: Row,
+    <R::Database as Database>::TypeInfo: TypeInfo,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> bool: Decode<'a, R::Database> + Type<R::Database>,
+    for<'a> i64: Decode<'a, R::Database> + Type<R::Database>,
+    for<'a> f64: Decode<'a, R::Database> + Type<R::Database>,
+    for<'a> String: Decode<'a, R::Database> + Type<R::Database>,
+    for<'a> Vec<u8>: Decode<'a, R::Database> + Type<R::Database>,
+{
     let mut out = Vec::with_capacity(row.columns().len());
     for i in 0..row.columns().len() {
-        out.push(map_cell(row, i)?);
+        let type_name = row.columns()[i].type_info().name();
+        out.push(map_cell(row, i, type_name)?);
     }
     Ok(out)
 }
 
-pub(crate) fn install_drivers() {
-    sqlx::any::install_default_drivers();
-}
+fn map_cell<R>(row: &R, idx: usize, type_name: &str) -> Result<CellValue, SextantError>
+where
+    R: Row,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> bool: Decode<'a, R::Database> + Type<R::Database>,
+    for<'a> i64: Decode<'a, R::Database> + Type<R::Database>,
+    for<'a> f64: Decode<'a, R::Database> + Type<R::Database>,
+    for<'a> String: Decode<'a, R::Database> + Type<R::Database>,
+    for<'a> Vec<u8>: Decode<'a, R::Database> + Type<R::Database>,
+{
+    let is_bool_type = type_name.to_ascii_lowercase().contains("bool");
 
-fn map_cell(row: &sqlx::any::AnyRow, idx: usize) -> Result<CellValue, SextantError> {
-    // Try types from most specific to most general.
-    if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
-        return Ok(v.map_or(CellValue::Null, CellValue::Bool));
+    if is_bool_type {
+        if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
+            return Ok(v.map_or(CellValue::Null, CellValue::Bool));
+        }
     }
     if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
         return Ok(v.map_or(CellValue::Null, CellValue::I64));

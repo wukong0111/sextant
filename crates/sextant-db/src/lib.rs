@@ -6,7 +6,7 @@ pub mod introspection;
 pub mod url_builder;
 
 pub use connection_manager::ConnectionManager;
-pub use executor::SqlxExecutor;
+pub use executor::{DbPool, SqlxExecutor};
 pub use url_builder::build_connection_url;
 
 #[cfg(test)]
@@ -16,15 +16,12 @@ mod tests {
     use super::*;
 
     async fn sqlite_executor() -> SqlxExecutor {
-        executor::install_drivers();
-        // Use a single-connection pool so that :memory: is shared across
-        // queries from the same executor.
-        let pool = sqlx::any::AnyPoolOptions::new()
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        SqlxExecutor::new(pool)
+        SqlxExecutor::new(DbPool::Sqlite(pool))
     }
 
     #[tokio::test]
@@ -65,6 +62,27 @@ mod tests {
         assert_eq!(row2[2], CellValue::I64(0));
         assert_eq!(row2[3], CellValue::Null);
         assert_eq!(row2[4], CellValue::Null);
+    }
+
+    #[tokio::test]
+    async fn sqlite_bool_column() {
+        let exec = sqlite_executor().await;
+
+        exec.execute("CREATE TABLE flags (id INTEGER PRIMARY KEY, enabled BOOLEAN)")
+            .await
+            .unwrap();
+        exec.execute("INSERT INTO flags (enabled) VALUES (1), (0), (NULL)")
+            .await
+            .unwrap();
+
+        let result = exec.execute("SELECT enabled FROM flags ORDER BY id")
+            .await
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 3);
+        assert_eq!(result.rows[0][0], CellValue::Bool(true));
+        assert_eq!(result.rows[1][0], CellValue::Bool(false));
+        assert_eq!(result.rows[2][0], CellValue::Null);
     }
 
     #[tokio::test]
@@ -115,7 +133,8 @@ mod tests {
             return; // skip if no test database is configured
         }
 
-        let exec = SqlxExecutor::connect(&url).await.unwrap();
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let exec = SqlxExecutor::new(DbPool::Postgres(pool));
 
         exec.execute("CREATE TEMP TABLE pg_test (id INT PRIMARY KEY, label TEXT, amount NUMERIC)")
             .await
@@ -134,3 +153,4 @@ mod tests {
         assert_eq!(result.rows[0][1], CellValue::String("hello".to_string()));
     }
 }
+

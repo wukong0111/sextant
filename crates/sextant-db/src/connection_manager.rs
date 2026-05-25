@@ -2,16 +2,15 @@
 
 use std::collections::HashMap;
 
-use sextant_core::{Connection, SextantError};
-use sqlx::AnyPool;
+use sextant_core::{Connection, Driver, SextantError};
 
-use crate::executor::SqlxExecutor;
+use crate::executor::{DbPool, SqlxExecutor};
 use crate::url_builder::build_connection_url;
 
 /// Maintains a map of named connection pools.
 #[derive(Debug, Default, Clone)]
 pub struct ConnectionManager {
-    pools: HashMap<String, AnyPool>,
+    pools: HashMap<String, DbPool>,
 }
 
 impl ConnectionManager {
@@ -30,11 +29,26 @@ impl ConnectionManager {
         conn: &Connection,
         password: Option<&str>,
     ) -> Result<SqlxExecutor, SextantError> {
-        crate::executor::install_drivers();
         let url = build_connection_url(conn, password)?;
-        let pool = AnyPool::connect(&url)
-            .await
-            .map_err(|e| SextantError::Database(format!("failed to connect to {name}: {e}")))?;
+        let pool = match conn.driver {
+            Driver::Postgres => {
+                let pool = sqlx::PgPool::connect(&url)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("failed to connect to {name}: {e}")))?;
+                DbPool::Postgres(pool)
+            }
+            Driver::Sqlite => {
+                let pool = sqlx::SqlitePool::connect(&url)
+                    .await
+                    .map_err(|e| SextantError::Database(format!("failed to connect to {name}: {e}")))?;
+                DbPool::Sqlite(pool)
+            }
+            Driver::Mysql => {
+                return Err(SextantError::Config(
+                    "MySQL is not supported in v0.1".to_string(),
+                ));
+            }
+        };
 
         self.pools.insert(name.to_string(), pool.clone());
         Ok(SqlxExecutor::new(pool))

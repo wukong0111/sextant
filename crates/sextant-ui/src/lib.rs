@@ -363,11 +363,7 @@ impl App {
             let mut mgr = sextant_db::ConnectionManager::new();
             match mgr.connect(&name, &config, password.as_deref()).await {
                 Ok(executor) => {
-                    match sextant_db::introspection::introspect_schemas_and_tables(
-                        &executor,
-                        config.driver,
-                    )
-                    .await
+                    match executor.introspect_schemas_and_tables(config.driver).await
                     {
                         Ok(schemas) => {
                             let _ = tx.send(AppMsg::Connected {
