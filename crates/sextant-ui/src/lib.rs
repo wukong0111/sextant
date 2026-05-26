@@ -257,15 +257,17 @@ impl App {
                 self.pending_g = false;
             }
             KeyCode::Char('h') if key.modifiers.is_empty() => {
-                if self.focus == Focus::Grid {
-                    self.result_grid.move_left();
+                match self.focus {
+                    Focus::Tree => self.handle_tree_left(),
+                    Focus::Grid => self.result_grid.move_left(),
                 }
                 self.pending_leader = false;
                 self.pending_g = false;
             }
             KeyCode::Char('l') if key.modifiers.is_empty() => {
-                if self.focus == Focus::Grid {
-                    self.result_grid.move_right();
+                match self.focus {
+                    Focus::Tree => self.handle_tree_right(tx),
+                    Focus::Grid => self.result_grid.move_right(),
                 }
                 self.pending_leader = false;
                 self.pending_g = false;
@@ -331,18 +333,72 @@ impl App {
                         let name = self.tree.connections[conn_idx].name.clone();
                         self.start_connection(&name, conn_idx, tx);
                     }
-                    ConnState::Connected { .. } => {
-                        self.tree.toggle_selected();
+                    ConnState::Connected { .. } | ConnState::Connecting => {}
+                }
+            }
+            tree_pane::LineKind::Schema { .. } | tree_pane::LineKind::Table { .. } => {
+                // No-op for v0.1; expand/collapse is handled by 'l'.
+            }
+        }
+    }
+
+    fn handle_tree_right(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(kind) = self.tree.selected_kind() else { return };
+
+        match kind {
+            tree_pane::LineKind::Connection => {
+                let Some(conn_idx) = self.tree.selected_connection_index() else { return };
+                let name = self.tree.connections[conn_idx].name.clone();
+                match &self.tree.connections[conn_idx].state {
+                    ConnState::Disconnected | ConnState::Error(_) => {
+                        self.start_connection(&name, conn_idx, tx);
+                    }
+                    ConnState::Connected { expanded, .. } => {
+                        self.connection_name = Some(name);
+                        if !expanded {
+                            self.tree.toggle_selected();
+                        }
                     }
                     ConnState::Connecting => {}
                 }
             }
-            tree_pane::LineKind::Schema { .. } => {
-                self.tree.toggle_selected();
+            tree_pane::LineKind::Schema { conn, schema } => {
+                if let Some(c) = self.tree.connections.get(conn) {
+                    if let ConnState::Connected { schemas, .. } = &c.state {
+                        if let Some(s) = schemas.get(schema) {
+                            if !s.expanded {
+                                self.tree.toggle_selected();
+                            }
+                        }
+                    }
+                }
             }
-            tree_pane::LineKind::Table { .. } => {
-                // No-op for v0.1; table browsing comes in 1.5.
+            tree_pane::LineKind::Table { .. } => {}
+        }
+    }
+
+    fn handle_tree_left(&mut self) {
+        let Some(kind) = self.tree.selected_kind() else { return };
+
+        match kind {
+            tree_pane::LineKind::Connection => {
+                let Some(conn_idx) = self.tree.selected_connection_index() else { return };
+                if let ConnState::Connected { expanded: true, .. } = &self.tree.connections[conn_idx].state {
+                    self.tree.toggle_selected();
+                }
             }
+            tree_pane::LineKind::Schema { conn, schema } => {
+                if let Some(c) = self.tree.connections.get(conn) {
+                    if let ConnState::Connected { schemas, .. } = &c.state {
+                        if let Some(s) = schemas.get(schema) {
+                            if s.expanded {
+                                self.tree.toggle_selected();
+                            }
+                        }
+                    }
+                }
+            }
+            tree_pane::LineKind::Table { .. } => {}
         }
     }
 
@@ -1061,8 +1117,10 @@ mod tests {
         // Header is row 0, first data row is row 1.
         // Let's find the position of "1" in the buffer.
         let mut found_one = false;
+        // The grid starts after the sidebar (25% of width = 10 cols for 40-wide).
+        let sidebar_width = (buf.area.width as f32 * 0.25) as u16;
         for y in 0..buf.area.height {
-            for x in 0..buf.area.width {
+            for x in sidebar_width..buf.area.width {
                 if buf[(x, y)].symbol() == "1" {
                     let style = buf[(x, y)].style();
                     assert_eq!(
