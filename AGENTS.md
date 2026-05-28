@@ -16,8 +16,13 @@ Agent-facing reference for the `sextant` project. Read this first before making 
 
 | File | Purpose |
 |------|---------|
+| `ARCHITECTURE.md` | Code map: data flow, where each concern lives, non-obvious invariants/gotchas, and "how to add X" recipes. Read before touching code. |
 | `sextant-spec.md` | Full product specification (features, UI layout, keybindings, architecture). |
 | `plan.md` | Development roadmap split into phases (Fase 0–3). Check this before starting work. |
+
+> **Note:** `CLAUDE.md` is a symlink to this file (`AGENTS.md`) — editing either edits both.
+> Project-specific workflows are available as slash-command skills in `.claude/skills/`
+> (`db-setup`, `workspace-check`, `plan-task`, `connect-tui`).
 
 ---
 
@@ -146,7 +151,10 @@ Containers use non-standard ports (5433, 3307) to avoid conflicts with local dat
 Before declaring a task done:
 1. `cargo check --workspace` compiles without warnings.
 2. `cargo test --workspace` passes.
-3. If the change affects the TUI, run `cargo run` and verify the app still starts and quits cleanly.
+3. `cargo clippy --workspace` is clean (clippy ships with the toolchain; no extra config needed).
+4. If the change affects the TUI, run `cargo run` and verify the app still starts and quits cleanly.
+
+> The `workspace-check` skill runs steps 1–3 plus `cargo fmt --all --check` in one shot.
 
 ---
 
@@ -197,8 +205,12 @@ When the user says "vamos con la Fase X" or "implementa el punto Y":
 |---------|---------|
 | `cargo check --workspace` | Compile all crates |
 | `cargo test --workspace` | Run all tests |
+| `cargo test -p <crate>` | Run one crate's tests (e.g. `-p sextant-db`) |
 | `cargo run` | Start the TUI |
 | `cargo run --bin sextant` | Same as above (explicit binary) |
+| `make seed-sqlite` | Seed the local `test.db` (SQLite) |
+| `make seed` | Seed all DBs (PostgreSQL, MySQL, SQLite) |
+| `make test-db` | Full cycle: start Docker DBs, run tests, tear down |
 
 | File | What to read when... |
 |------|----------------------|
