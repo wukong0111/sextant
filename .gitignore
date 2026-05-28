@@ -21,3 +21,6 @@
 # Local data / state (sextant runtime files)
 *.db
 *.swp
+
+# Claude Code local overrides (personal, not shared)
+.claude/settings.local.json
