@@ -1,5 +1,7 @@
 //! Floating SQL editor modal backed by `tui-textarea`.
 
+use std::path::PathBuf;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -21,6 +23,8 @@ struct Completion {
 struct Buffer {
     textarea: TextArea<'static>,
     dirty: bool,
+    /// File this buffer is bound to (set after the first save).
+    path: Option<PathBuf>,
 }
 
 impl Buffer {
@@ -28,6 +32,7 @@ impl Buffer {
         Self {
             textarea: styled_textarea(lines),
             dirty: false,
+            path: None,
         }
     }
 }
@@ -123,6 +128,21 @@ impl EditorModal {
         self.index = index;
     }
 
+    /// Path the active buffer is bound to, if it has been saved.
+    pub fn active_path(&self) -> Option<PathBuf> {
+        self.active().path.clone()
+    }
+
+    /// Bind the active buffer to a file path (after its first save).
+    pub fn set_active_path(&mut self, path: PathBuf) {
+        self.active_mut().path = Some(path);
+    }
+
+    /// True if any buffer has unsaved changes (used for the quit prompt).
+    pub fn any_dirty(&self) -> bool {
+        self.buffers.iter().any(|b| b.dirty)
+    }
+
     /// Render the modal centered over the given full-screen area.
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let modal_area = centered_rect(80, 60, area);
@@ -138,7 +158,13 @@ impl EditorModal {
         // Tab bar: one chip per buffer, with `●` for unsaved changes.
         let mut spans = Vec::new();
         for (i, buf) in self.buffers.iter().enumerate() {
-            let label = format!(" {}{} ", i + 1, if buf.dirty { "●" } else { "" });
+            let name = buf
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| format!("{}", i + 1));
+            let label = format!(" {}{} ", name, if buf.dirty { "●" } else { "" });
             let style = if i == self.active {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
             } else {
@@ -248,7 +274,6 @@ impl EditorModal {
                     (super::Mode::Normal, EditorAction::None)
                 }
                 KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.mark_saved();
                     (super::Mode::Normal, EditorAction::Save)
                 }
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -309,7 +334,6 @@ impl EditorModal {
                 }
 
                 if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.mark_saved();
                     return (super::Mode::Insert, EditorAction::Save);
                 }
 

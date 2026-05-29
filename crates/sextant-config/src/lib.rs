@@ -47,6 +47,40 @@ pub fn config_dir() -> std::path::PathBuf {
     paths::config_dir()
 }
 
+/// Return the directory where saved `.sql` queries live.
+pub fn queries_dir() -> std::path::PathBuf {
+    paths::queries_dir()
+}
+
+/// Resolve a query name to a `.sql` path inside [`queries_dir`].
+pub fn query_path(name: &str) -> std::path::PathBuf {
+    paths::query_path(name)
+}
+
+/// Write `content` to a `.sql` file, creating the parent directory if needed.
+///
+/// Enforces restrictive permissions on Unix per the security model: the
+/// queries directory is `0700` and the `.sql` file is `0600` (query text on
+/// disk is not encrypted; the threat model assumes local-machine access only).
+pub fn write_query(path: &Path, content: &str) -> Result<(), SextantError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+        set_mode(parent, 0o700);
+    }
+    std::fs::write(path, content)?;
+    set_mode(path, 0o600);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _mode: u32) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +201,41 @@ driver = "oracle"
         unsafe { std::env::set_var("SEXTANT_PROD_DB_PASSWORD", "hunter2") };
         assert_eq!(connection_password("prod db"), Some("hunter2".to_string()));
         unsafe { std::env::remove_var("SEXTANT_PROD_DB_PASSWORD") };
+    }
+
+    #[test]
+    fn query_path_appends_sql_extension() {
+        assert!(
+            query_path("report")
+                .to_string_lossy()
+                .ends_with("report.sql")
+        );
+        assert!(
+            query_path("report.sql")
+                .to_string_lossy()
+                .ends_with("report.sql")
+        );
+    }
+
+    #[test]
+    fn write_query_creates_file_with_restrictive_perms() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("q.sql");
+
+        write_query(&path, "SELECT 1;").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "SELECT 1;");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "file should be 0600");
+            let dir_mode = std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dir_mode, 0o700, "queries dir should be 0700");
+        }
     }
 }

@@ -17,3 +17,27 @@ pub fn config_dir() -> PathBuf {
             .join("sextant")
     }
 }
+
+/// Returns the directory where saved `.sql` queries live
+/// (`$XDG_DATA_HOME/sextant/queries` or `~/.local/share/sextant/queries`).
+pub fn queries_dir() -> PathBuf {
+    let data = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        PathBuf::from(xdg)
+    } else {
+        dirs::home_dir()
+            .expect("home directory must be available")
+            .join(".local")
+            .join("share")
+    };
+    data.join("sextant").join("queries")
+}
+
+/// Resolve a user-provided query name to a path inside [`queries_dir`],
+/// appending a `.sql` extension when none is present.
+pub fn query_path(name: &str) -> PathBuf {
+    let mut path = queries_dir().join(name);
+    if path.extension().is_none() {
+        path.set_extension("sql");
+    }
+    path
+}

@@ -107,6 +107,10 @@ pub struct App {
     pending_commit: Option<Vec<String>>,
     /// SQL used for the current browse, replayed to refresh after a commit.
     last_browse_sql: Option<String>,
+    /// Filename being entered to save the active buffer (Save-as prompt).
+    save_prompt: Option<String>,
+    /// Whether the quit-with-unsaved-buffers prompt is showing.
+    quit_prompt: bool,
     saved_buffers: std::collections::HashMap<String, String>,
     /// Column/PK metadata per connection, keyed by `(schema, table)`.
     table_meta: std::collections::HashMap<
@@ -145,6 +149,8 @@ impl App {
             pending_d: false,
             pending_commit: None,
             last_browse_sql: None,
+            save_prompt: None,
+            quit_prompt: false,
             saved_buffers: std::collections::HashMap::new(),
             table_meta: std::collections::HashMap::new(),
             last_result: None,
@@ -188,6 +194,16 @@ impl App {
         // Commit-confirmation modal (floating overlay).
         if let Some(statements) = &self.pending_commit {
             render_commit_modal(frame, area, statements);
+        }
+
+        // Save-as filename prompt.
+        if let Some(name) = &self.save_prompt {
+            render_save_prompt(frame, area, name);
+        }
+
+        // Quit-with-unsaved-buffers prompt.
+        if self.quit_prompt {
+            render_quit_prompt(frame, area);
         }
 
         // Status line at the bottom.
@@ -267,13 +283,50 @@ impl App {
 
         tracing::debug!("key: {:?}, modifiers: {:?}", key.code, key.modifiers);
 
+        // Save-as filename prompt swallows keys until confirmed/cancelled.
+        if self.save_prompt.is_some() {
+            match key.code {
+                KeyCode::Enter => self.confirm_save_prompt(),
+                KeyCode::Esc => self.save_prompt = None,
+                KeyCode::Backspace => {
+                    if let Some(name) = self.save_prompt.as_mut() {
+                        name.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(name) = self.save_prompt.as_mut() {
+                        name.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Quit-with-unsaved-buffers prompt.
+        if self.quit_prompt {
+            match key.code {
+                KeyCode::Char('d') => self.should_quit = true,
+                KeyCode::Char('c') | KeyCode::Esc => self.quit_prompt = false,
+                KeyCode::Char('s') => {
+                    self.quit_prompt = false;
+                    self.save_editor();
+                    if self.save_prompt.is_none() && !self.editor.any_dirty() {
+                        self.should_quit = true;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.editor_open {
             let (new_mode, action) = self.editor.handle_key(key, self.mode);
             tracing::debug!("editor action: {:?}, new_mode: {:?}", action, new_mode);
             self.mode = new_mode;
             match action {
                 EditorAction::Execute => self.run_editor_sql(tx),
-                EditorAction::Save => self.save_editor_buffer(),
+                EditorAction::Save => self.save_editor(),
                 EditorAction::Close => self.close_editor(),
                 EditorAction::None => {}
             }
@@ -304,7 +357,11 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
+                if self.editor.any_dirty() {
+                    self.quit_prompt = true;
+                } else {
+                    self.should_quit = true;
+                }
             }
             KeyCode::Tab => {
                 self.focus = match self.focus {
@@ -726,15 +783,47 @@ impl App {
     }
 
     fn close_editor(&mut self) {
+        // Snapshot the active buffer so reopening the editor for this
+        // connection restores its text (volatile, in-memory convenience).
+        if let Some(name) = self.connection_name.clone() {
+            self.saved_buffers.insert(name, self.editor.content());
+        }
         self.editor_open = false;
         self.mode = Mode::Normal;
     }
 
-    fn save_editor_buffer(&mut self) {
-        if let Some(name) = &self.connection_name {
-            self.saved_buffers
-                .insert(name.clone(), self.editor.content());
-            self.editor.mark_saved();
+    /// Save the active buffer to its `.sql` file, prompting for a name on the
+    /// first save.
+    fn save_editor(&mut self) {
+        match self.editor.active_path() {
+            Some(path) => self.write_active_buffer(&path),
+            None => self.save_prompt = Some(String::new()),
+        }
+    }
+
+    /// Resolve the typed filename, write the active buffer, and bind the path.
+    fn confirm_save_prompt(&mut self) {
+        let Some(name) = self.save_prompt.take() else {
+            return;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let path = sextant_config::query_path(name);
+        self.write_active_buffer(&path);
+    }
+
+    fn write_active_buffer(&mut self, path: &std::path::Path) {
+        match sextant_config::write_query(path, &self.editor.content()) {
+            Ok(()) => {
+                self.editor.set_active_path(path.to_path_buf());
+                self.editor.mark_saved();
+                self.last_error = None;
+            }
+            Err(e) => {
+                self.last_error = Some(format!("save failed: {e}"));
+            }
         }
     }
 
@@ -1070,6 +1159,63 @@ fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String]) {
     );
 }
 
+/// Render a small centered modal with the given title and body lines.
+fn render_centered_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
+    let width = (area.width as f32 * 0.6).max(20.0) as u16;
+    let height = (lines.len() as u16 + 2).min(area.height.max(3));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!(" {title} "))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .style(Style::default().bg(Color::Black)),
+        ),
+        rect,
+    );
+}
+
+/// Render the Save-as filename prompt.
+fn render_save_prompt(frame: &mut Frame, area: Rect, name: &str) {
+    render_centered_modal(
+        frame,
+        area,
+        "Save as",
+        vec![
+            Line::from(format!("{name}_")),
+            Line::from(Span::styled(
+                "type a name (.sql) │ <Enter> save │ <Esc> cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
+    );
+}
+
+/// Render the quit-with-unsaved-buffers prompt.
+fn render_quit_prompt(frame: &mut Frame, area: Rect) {
+    render_centered_modal(
+        frame,
+        area,
+        "Unsaved buffers",
+        vec![
+            Line::from("There are unsaved buffers."),
+            Line::from(Span::styled(
+                "s save │ d discard & quit │ c/<Esc> cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1377,17 +1523,12 @@ mod tests {
             KeyModifiers::NONE,
         )));
 
-        // Return to normal mode, then save buffer with Ctrl+S.
+        // Return to normal mode, then close the modal (which snapshots the
+        // buffer for this connection).
         app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
             KeyCode::Esc,
             KeyModifiers::NONE,
         )));
-        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
-            KeyCode::Char('s'),
-            KeyModifiers::CONTROL,
-        )));
-
-        // Close modal.
         app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
             KeyCode::Esc,
             KeyModifiers::NONE,
@@ -1735,5 +1876,54 @@ mod tests {
         // Esc cancels the commit.
         app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)));
         assert!(app.pending_commit.is_none());
+    }
+
+    #[test]
+    fn ctrl_s_opens_save_prompt_then_esc_cancels() {
+        let mut app = test_app();
+        app.open_editor();
+        // Insert mode, type something so the buffer is dirty.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('i'))));
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('x'))));
+        // Ctrl+S on an unsaved buffer opens the Save-as prompt.
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.save_prompt.is_some());
+
+        // Typing feeds the filename buffer.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('q'))));
+        assert_eq!(app.save_prompt.as_deref(), Some("q"));
+
+        // Esc cancels without writing, editor stays open.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(app.save_prompt.is_none());
+        assert!(app.editor_open);
+    }
+
+    #[test]
+    fn ctrl_q_with_dirty_buffer_prompts() {
+        let mut app = test_app();
+        app.open_editor();
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('i'))));
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('x'))));
+        // Esc to Normal, Esc to close the modal (buffer remains dirty/unsaved).
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)));
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(!app.editor_open);
+
+        // Ctrl+Q prompts instead of quitting because a buffer is dirty.
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.quit_prompt);
+        assert!(!app.should_quit);
+
+        // `c` cancels the prompt.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('c'))));
+        assert!(!app.quit_prompt);
+        assert!(!app.should_quit);
     }
 }
