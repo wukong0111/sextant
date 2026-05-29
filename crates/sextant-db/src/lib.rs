@@ -3,10 +3,12 @@
 pub mod connection_manager;
 pub mod executor;
 pub mod introspection;
+pub mod sql;
 pub mod url_builder;
 
 pub use connection_manager::ConnectionManager;
 pub use executor::{DbPool, SqlxExecutor};
+pub use sql::{generate_create_table, qualified_table, quote_ident};
 pub use url_builder::build_connection_url;
 
 #[cfg(test)]
