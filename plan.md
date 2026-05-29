@@ -106,7 +106,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 ### 1.4 Editor SQL Modal (básico) ✅
 
 - Componente `EditorModal`:
-  - Usar `tui-textarea` o implementación propia ligera (recomendación: `tui-textarea` para v0.1, migrar a custom con tree-sitter en v0.2).
+  - Usar `tui-textarea` o implementación propia ligera (recomendación: `tui-textarea`; la migración a editor propio con tree-sitter se pospuso a post-v1).
   - Solo **Insert mode** y **Normal mode** simplificado:
     - `i` → insert, `Esc` → normal.
     - `Ctrl+Enter` ejecuta SQL.
@@ -156,7 +156,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 
 ## Fase 2 — v0.2: MySQL + Autocomplete + Edición Inline + Schema Viewer
 
-**Objetivo**: Completar los 3 drivers, editor con syntax highlighting, CRUD en grid, árbol con DDL.
+**Objetivo**: Completar los 3 drivers, autocomplete, CRUD en grid, y árbol con DDL + browse rows. (El syntax highlighting se movió a post-v1.)
 
 ### 2.1 Driver MySQL ✅ (`432d8df`)
 
@@ -165,25 +165,9 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - [x] Introspección vía `information_schema` (MySQL 8+).
 - [x] Entorno Docker (`compose.yml` + `Makefile`) para tests de integración PG/MySQL.
 
-### 2.2 Syntax Highlighting
+> **Orden de prioridad (revisado).** La Fase 2 se reordenó por ratio **valor/coste**: primero lo que aporta más valor funcional con menos riesgo. El syntax highlighting **salió de la fase** (movido a post-v1, Fase 4) porque es lo más caro (obliga a un editor propio) y lo de menor valor (su utilidad es *leer*, no escribir). El autocomplete se mantiene porque su metadata ya está resuelta por la introspección existente de `sextant-db`.
 
-- Integrar `tree-sitter` + `tree-sitter-sql`.
-- Reemplazar `tui-textarea` por editor propio (`EditorBuffer`):
-  - Buffer como `Vec<Rope>` o `Vec<String>` (lineas).
-  - Tree-sitter parsea en background, genera spans de estilo.
-  - Render con `ratatui::text::Line` + `Span` con estilos por token (keyword, string, number, comment).
-
-### 2.3 Autocomplete
-
-- `AutocompleteEngine` en `sextant-sql` (usa `sqlparser-rs` para parsear AST parcial).
-- Contextos:
-  - Tablas/vistas del schema actual.
-  - Columnas de tablas en `FROM`/`JOIN`.
-  - Keywords SQL + funciones por dialecto.
-- Popup flotante sobre el editor (`<C-Space>` para trigger manual; también automático tras `.` o espacio).
-- Cache de metadata del schema (refrescada al conectar o manualmente).
-
-### 2.4 Grid Editable (CRUD)
+### 2.2 Grid Editable (CRUD)
 
 - Introspección de PK por tabla: consultar `information_schema` / `pragma table_info`.
 - Si tabla tiene PK: grid editable. Sin PK: read-only con `🔒` en status line.
@@ -201,18 +185,29 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   - Ejecutar en transacción (BEGIN → statements → COMMIT).
   - Optimistic concurrency: si la fila fue modificada por otro, mostrar error.
 
-### 2.5 Schema Viewer + DDL
+### 2.3 Autocomplete (básico)
+
+- `AutocompleteEngine` basado en **tokenización ligera + heurísticas de contexto** (mirar el token anterior al cursor), **no** un AST completo: `sqlparser-rs` se atraganta con SQL incompleto. Evitar esa dependencia salvo que se demuestre necesaria.
+- Contextos (alcance mínimo primero):
+  - Tras `FROM`/`JOIN`/`UPDATE`/`INTO` → tablas/vistas del schema actual.
+  - Tras `tabla.` → columnas de esa tabla.
+  - En otro caso → keywords SQL + funciones por dialecto.
+  - *Stretch*: resolución de alias (`FROM users u ... u.`) y subqueries.
+- Popup flotante sobre el editor (`<C-Space>` para trigger manual; también automático tras `.`).
+- Cache de metadata del schema reutilizando la introspección de `sextant-db` (refrescada al conectar o manualmente).
+
+### 2.4 Schema Viewer + DDL
 
 - Árbol enriquecido:
   - Expandir tabla → `Columns`, `Indexes`, `Constraints`, `Foreign Keys`.
-  - `Enter` en tabla → browse rows (grid).
+  - `Enter` (o `l`/`→`) en tabla → browse rows: ejecutar `SELECT * FROM {tabla} LIMIT 500` y mostrar en grid.
   - `Enter` en columna/índice → detalle en panel (a definir: split horizontal o popup).
 - `D` en tabla → emitir `CREATE TABLE` skeleton al editor (abre editor modal con el DDL).
 - Generar DDL básico desde metadata (tipos, defaults, constraints).
 
-### 2.6 Buffer Management (múltiples tabs)
+### 2.5 Buffer Management (múltiples tabs)
 
-- Múltiples buffers por conexión.
+- Múltiples buffers por conexión (sobre `tui-textarea`: `Vec<TextArea>`).
 - `<Tab>` / `<S-Tab>` para ciclar buffers dentro del editor modal.
 - Dirty marker `●` en nombre de tab.
 - Guardar a archivo `.sql` (`<C-s>` o `:w path`).
@@ -220,9 +215,9 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 
 ### Criterio de éxito v0.2
 - Conectar a MySQL, PG, SQLite indistintamente.
-- Editor con SQL coloreado y autocomplete funcional.
 - Editar celdas, insertar filas, borrar, y commitear cambios.
-- Ver schema expandido y generar DDL.
+- Autocomplete funcional (tablas + columnas).
+- Ver schema expandido, browse rows (`SELECT * ... LIMIT 500`) y generar DDL.
 
 ---
 
@@ -303,6 +298,8 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 
 ## Fase 4 — Post-v1 (No planificado aquí)
 
+- **Syntax highlighting (editor propio + tree-sitter)**: requiere **reemplazar `tui-textarea` por un editor propio** (`EditorBuffer` con `Vec<String>`: cursor, insert/delete, UTF-8 multibyte, scroll, selección), porque `tui-textarea 0.7` tiene `line_spans` en `pub(crate)` y no permite colorear por token. Sobre ese editor, integrar `tree-sitter` + `tree-sitter-sql` (parseo síncrono; los buffers SQL son pequeños) y render con `ratatui::text::Line` + `Span` por token. Migrar es la tarea de peor ratio valor/coste; al hacerla habrá que reintegrar autocomplete (2.3) y tabs (2.5) sobre el nuevo editor.
+- **Asistente IA opcional**: generar/explicar queries en lenguaje natural. Conexión **opt-in**: el usuario configura proveedor/modelo + token API (`config.toml` para el modelo; keyring/env para el token). Sin configurar → la feature no aparece y `sextant` funciona 100% offline. **Complementa** (no sustituye) al autocomplete local, que sigue siendo la fuente fiable de nombres del schema (la IA puede alucinar columnas).
 - ER diagrams, `EXPLAIN` visualizer.
 - Plugin system.
 - SSH tunneling.
@@ -316,7 +313,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 |------|------------------------------|
 | 0 | `ratatui`, `crossterm`, `tokio`, `tracing`, `tracing-subscriber`, `color-eyre` |
 | 1 | `sqlx`, `serde`, `toml`, `dirs` |
-| 2 | `tree-sitter`, `tree-sitter-sql`, `sqlparser`, `tui-textarea` (temporal) |
+| 2 | Ninguna nueva imprescindible: se mantiene `tui-textarea`. `sqlparser` solo si el autocomplete heurístico no basta. (`tree-sitter` + `tree-sitter-sql` se posponen a post-v1 junto con el highlighting.) |
 | 3 | `csv`, `serde_json`, `keyring`, `nucleo`/`fuzzy-matcher` |
 
 ---
@@ -326,5 +323,5 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - **Rendimiento**: el grid read-only de v0.1 puede cargar todo en memoria porque `ratatui::Table` requiere todas las filas. Para v0.2+, considerar virtualización (renderizar solo filas visibles) si hay tablas >10k rows.
 - ~~**SQLx `Any` driver**: simplifica mucho el código unificado, pero hay que verificar que soporta bien los tipos de los 3 backends. Si hay problemas (ej. JSON en SQLite vs PG), caer a pools tipados por driver con enum wrapper.~~
   - **Actualizado (post-Fase 1)**: Se migró directamente a pools tipados (`DbPool` enum) porque `Any` falla con `BOOLEAN` en SQLite. El código ahora usa `PgPool`/`SqlitePool` directamente, eliminando `AnyPool` y `install_drivers`.
-- **Editor propio vs `tui-textarea`**: `tui-textarea` acelera v0.1 pero no soporta syntax highlighting nativo. La migración a editor propio es necesaria en v0.2. Valorar si conviene invertir directamente en el editor propio desde v0.1 para evitar la migración.
+- **Editor propio vs `tui-textarea`**: `tui-textarea` no expone styling por token (`line_spans` es `pub(crate)`), así que el syntax highlighting obliga a un editor propio. Decisión (revisada Fase 2): **mantener `tui-textarea`** durante toda la v0.2 (CRUD, autocomplete y tabs se construyen encima: cursor vía `cursor()`, multi-buffer vía `Vec<TextArea>`) y **mover el editor propio + highlighting a post-v1 (Fase 4)**, por ser la tarea de peor ratio valor/coste.
 - **Recursión en event loop**: usar `mpsc::UnboundedChannel` para evitar backpressure; el render corre en el thread principal, el trabajo pesado en `tokio` tasks.
