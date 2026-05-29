@@ -27,6 +27,42 @@ impl SqlxExecutor {
     pub(crate) fn pool(&self) -> &DbPool {
         &self.pool
     }
+
+    /// Execute a batch of statements inside a single transaction.
+    ///
+    /// All statements run in order; on any error the transaction is rolled
+    /// back (by dropping the uncommitted `Transaction`) and the error is
+    /// returned. On success the transaction commits and the total number of
+    /// affected rows is returned. Used by grid editing (Fase 2.2) to apply
+    /// pending UPDATE/INSERT/DELETE atomically.
+    pub async fn execute_transaction(&self, statements: &[String]) -> Result<u64, SextantError> {
+        macro_rules! run_tx {
+            ($db:ty, $pool:expr) => {{
+                let mut tx = $pool
+                    .begin()
+                    .await
+                    .map_err(|e| SextantError::Database(format!("begin failed: {e}")))?;
+                let mut affected = 0u64;
+                for sql in statements {
+                    let result = sqlx::query::<$db>(sqlx::AssertSqlSafe(sql.as_str()))
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| SextantError::Database(format!("statement failed: {e}")))?;
+                    affected += result.rows_affected();
+                }
+                tx.commit()
+                    .await
+                    .map_err(|e| SextantError::Database(format!("commit failed: {e}")))?;
+                Ok(affected)
+            }};
+        }
+
+        match &self.pool {
+            DbPool::Postgres(pool) => run_tx!(sqlx::Postgres, pool),
+            DbPool::MySql(pool) => run_tx!(sqlx::MySql, pool),
+            DbPool::Sqlite(pool) => run_tx!(sqlx::Sqlite, pool),
+        }
+    }
 }
 
 impl QueryExecutor for SqlxExecutor {

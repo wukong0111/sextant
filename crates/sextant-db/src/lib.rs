@@ -8,7 +8,10 @@ pub mod url_builder;
 
 pub use connection_manager::ConnectionManager;
 pub use executor::{DbPool, SqlxExecutor};
-pub use sql::{generate_create_table, qualified_table, quote_ident};
+pub use sql::{
+    build_delete, build_insert, build_update, generate_create_table, qualified_table, quote_ident,
+    to_sql_literal,
+};
 pub use url_builder::build_connection_url;
 
 #[cfg(test)]
@@ -115,6 +118,56 @@ mod tests {
 
         let delete = exec.execute("DELETE FROM t WHERE id = 1").await.unwrap();
         assert_eq!(delete.rows_affected, Some(1));
+    }
+
+    #[tokio::test]
+    async fn sqlite_transaction_commits_all() {
+        let exec = sqlite_executor().await;
+        exec.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+            .await
+            .unwrap();
+
+        let affected = exec
+            .execute_transaction(&[
+                "INSERT INTO t (id, val) VALUES (1, 'a')".to_string(),
+                "INSERT INTO t (id, val) VALUES (2, 'b')".to_string(),
+                "UPDATE t SET val = 'z' WHERE id = 1".to_string(),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(affected, 3);
+
+        let result = exec
+            .execute("SELECT id, val FROM t ORDER BY id")
+            .await
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][1], CellValue::String("z".to_string()));
+    }
+
+    #[tokio::test]
+    async fn sqlite_transaction_rolls_back_on_error() {
+        let exec = sqlite_executor().await;
+        exec.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+            .await
+            .unwrap();
+        exec.execute("INSERT INTO t (id, val) VALUES (1, 'a')")
+            .await
+            .unwrap();
+
+        // Second statement violates the PK; the whole batch must roll back.
+        let err = exec
+            .execute_transaction(&[
+                "INSERT INTO t (id, val) VALUES (2, 'b')".to_string(),
+                "INSERT INTO t (id, val) VALUES (1, 'dup')".to_string(),
+            ])
+            .await;
+        assert!(err.is_err());
+
+        let result = exec.execute("SELECT id FROM t ORDER BY id").await.unwrap();
+        // Only the original row 1 remains; row 2 was rolled back.
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], CellValue::I64(1));
     }
 
     #[tokio::test]

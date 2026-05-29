@@ -70,6 +70,78 @@ pub fn generate_create_table(
     )
 }
 
+/// Render a cell value as a SQL literal.
+///
+/// The sentinel string `NULL` (matching how the grid renders
+/// [`sextant_core::CellValue::Null`]) becomes an unquoted `NULL`; any other
+/// value is wrapped in single quotes with embedded quotes doubled. Numeric and
+/// boolean columns accept quoted literals via the backends' implicit coercion,
+/// which keeps the generator dialect-agnostic.
+pub fn to_sql_literal(value: &str) -> String {
+    if value == "NULL" {
+        "NULL".to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+}
+
+/// `UPDATE <table> SET ... WHERE <pk...>` keyed by the primary key.
+pub fn build_update(
+    driver: Driver,
+    schema: &str,
+    table: &str,
+    set: &[(&str, &str)],
+    pk: &[(&str, &str)],
+) -> String {
+    let set_clause = set
+        .iter()
+        .map(|(col, val)| format!("{} = {}", quote_ident(driver, col), to_sql_literal(val)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "UPDATE {} SET {} WHERE {}",
+        qualified_table(driver, schema, table),
+        set_clause,
+        where_pk(driver, pk),
+    )
+}
+
+/// `INSERT INTO <table> (cols...) VALUES (vals...)`.
+pub fn build_insert(driver: Driver, schema: &str, table: &str, cols: &[(&str, &str)]) -> String {
+    let names = cols
+        .iter()
+        .map(|(col, _)| quote_ident(driver, col))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values = cols
+        .iter()
+        .map(|(_, val)| to_sql_literal(val))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        qualified_table(driver, schema, table),
+        names,
+        values,
+    )
+}
+
+/// `DELETE FROM <table> WHERE <pk...>` keyed by the primary key.
+pub fn build_delete(driver: Driver, schema: &str, table: &str, pk: &[(&str, &str)]) -> String {
+    format!(
+        "DELETE FROM {} WHERE {}",
+        qualified_table(driver, schema, table),
+        where_pk(driver, pk),
+    )
+}
+
+fn where_pk(driver: Driver, pk: &[(&str, &str)]) -> String {
+    pk.iter()
+        .map(|(col, val)| format!("{} = {}", quote_ident(driver, col), to_sql_literal(val)))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +222,63 @@ mod tests {
         assert!(!ddl.contains("PRIMARY KEY"));
         assert!(ddl.contains("CREATE TABLE `app`.`logs`"));
         assert!(ddl.contains("`msg` text"));
+    }
+
+    #[test]
+    fn sql_literal_quotes_and_escapes() {
+        assert_eq!(to_sql_literal("hello"), "'hello'");
+        assert_eq!(to_sql_literal("it's"), "'it''s'");
+        assert_eq!(to_sql_literal("NULL"), "NULL");
+        assert_eq!(to_sql_literal("42"), "'42'");
+    }
+
+    #[test]
+    fn update_statement_by_pk() {
+        let sql = build_update(
+            Driver::Postgres,
+            "public",
+            "users",
+            &[("name", "Alice"), ("note", "NULL")],
+            &[("id", "7")],
+        );
+        assert_eq!(
+            sql,
+            "UPDATE \"public\".\"users\" SET \"name\" = 'Alice', \"note\" = NULL WHERE \"id\" = '7'"
+        );
+    }
+
+    #[test]
+    fn update_statement_composite_pk() {
+        let sql = build_update(
+            Driver::Mysql,
+            "app",
+            "membership",
+            &[("val", "x")],
+            &[("a", "1"), ("b", "2")],
+        );
+        assert_eq!(
+            sql,
+            "UPDATE `app`.`membership` SET `val` = 'x' WHERE `a` = '1' AND `b` = '2'"
+        );
+    }
+
+    #[test]
+    fn insert_statement() {
+        let sql = build_insert(
+            Driver::Sqlite,
+            "main",
+            "users",
+            &[("id", "1"), ("name", "Bob")],
+        );
+        assert_eq!(
+            sql,
+            "INSERT INTO \"main\".\"users\" (\"id\", \"name\") VALUES ('1', 'Bob')"
+        );
+    }
+
+    #[test]
+    fn delete_statement_by_pk() {
+        let sql = build_delete(Driver::Postgres, "public", "users", &[("id", "9")]);
+        assert_eq!(sql, "DELETE FROM \"public\".\"users\" WHERE \"id\" = '9'");
     }
 }
