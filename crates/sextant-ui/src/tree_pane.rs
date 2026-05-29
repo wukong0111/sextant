@@ -15,13 +15,16 @@ pub struct ColumnNode {
     pub is_pk: bool,
 }
 
-/// A table inside a schema. Columns are filled lazily when the table is first
-/// expanded (from the connection's cached metadata).
+/// A table inside a schema. Columns come from cached metadata on expand;
+/// indexes/FKs are loaded lazily (async) and stored as display strings.
 #[derive(Debug, Clone)]
 pub struct TableItem {
     pub name: String,
     pub expanded: bool,
     pub columns: Vec<ColumnNode>,
+    pub indexes: Vec<String>,
+    pub foreign_keys: Vec<String>,
+    pub detail_loaded: bool,
 }
 
 impl TableItem {
@@ -31,6 +34,9 @@ impl TableItem {
             name,
             expanded: false,
             columns: Vec::new(),
+            indexes: Vec::new(),
+            foreign_keys: Vec::new(),
+            detail_loaded: false,
         }
     }
 }
@@ -83,6 +89,8 @@ pub enum LineKind {
         table: usize,
         col: usize,
     },
+    /// A non-actionable detail line (index or foreign key) under a table.
+    Detail,
 }
 
 #[derive(Debug, Clone)]
@@ -160,7 +168,7 @@ impl TreePane {
                     t.expanded = !t.expanded;
                 }
             }
-            LineKind::Column { .. } => {}
+            LineKind::Column { .. } | LineKind::Detail => {}
         }
     }
 
@@ -222,6 +230,29 @@ impl TreePane {
         self.table_ref(conn, schema, table)
             .map(|t| !t.columns.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Whether the table's index/FK detail has been loaded.
+    pub fn table_detail_loaded(&self, conn: usize, schema: usize, table: usize) -> bool {
+        self.table_ref(conn, schema, table)
+            .map(|t| t.detail_loaded)
+            .unwrap_or(false)
+    }
+
+    /// Store the table's index/FK detail (pre-formatted display strings).
+    pub fn set_table_detail(
+        &mut self,
+        conn: usize,
+        schema: usize,
+        table: usize,
+        indexes: Vec<String>,
+        foreign_keys: Vec<String>,
+    ) {
+        if let Some(t) = self.table_mut(conn, schema, table) {
+            t.indexes = indexes;
+            t.foreign_keys = foreign_keys;
+            t.detail_loaded = true;
+        }
     }
 
     /// Replace a table's column nodes (filled from cached metadata on expand).
@@ -316,6 +347,18 @@ impl TreePane {
                                             "        {} {}{}",
                                             col.name, col.type_name, pk
                                         ),
+                                    });
+                                }
+                                for idx in &table.indexes {
+                                    lines.push(Line {
+                                        kind: LineKind::Detail,
+                                        text: format!("        {idx}"),
+                                    });
+                                }
+                                for fk in &table.foreign_keys {
+                                    lines.push(Line {
+                                        kind: LineKind::Detail,
+                                        text: format!("        {fk}"),
                                     });
                                 }
                             }
@@ -501,6 +544,48 @@ mod tests {
         assert!(lines[4].text.contains("name"));
         assert!(!lines[4].text.contains("PK"));
         assert!(matches!(lines[3].kind, LineKind::Column { col: 0, .. }));
+    }
+
+    #[test]
+    fn expanded_table_shows_index_and_fk_detail() {
+        let mut tree = TreePane::new(vec!["conn".into()]);
+        tree.set_connected(
+            0,
+            vec![SchemaItem {
+                name: "public".into(),
+                expanded: true,
+                tables: tables(&["users"]),
+            }],
+        );
+        tree.set_table_columns(
+            0,
+            0,
+            0,
+            vec![ColumnNode {
+                name: "id".into(),
+                type_name: "int".into(),
+                is_pk: true,
+            }],
+        );
+        assert!(!tree.table_detail_loaded(0, 0, 0));
+        tree.set_table_detail(
+            0,
+            0,
+            0,
+            vec!["⚿ idx_users_email (email)".into()],
+            vec!["→ org_id → orgs(id)".into()],
+        );
+        assert!(tree.table_detail_loaded(0, 0, 0));
+        tree.set_table_expanded(0, 0, 0, true);
+
+        let text: String = tree
+            .visible_lines()
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("idx_users_email"), "got: {text}");
+        assert!(text.contains("orgs(id)"), "got: {text}");
     }
 
     #[test]

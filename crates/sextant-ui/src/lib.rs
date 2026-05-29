@@ -51,6 +51,13 @@ pub enum AppMsg {
     QueryResult(sextant_core::QueryResult),
     /// Query or connection error.
     QueryError(String),
+    /// Lazily-loaded index/FK detail for an expanded table.
+    TableDetailLoaded {
+        conn: usize,
+        schema: usize,
+        table: usize,
+        detail: sextant_db::introspection::TableDetail,
+    },
     /// Result of committing pending grid edits (rows affected, or error).
     CommitResult(Result<u64, String>),
     /// Toggle the SQL editor modal.
@@ -450,8 +457,10 @@ impl App {
             } => {
                 self.browse_table(conn, schema, table, tx);
             }
-            tree_pane::LineKind::Schema { .. } | tree_pane::LineKind::Column { .. } => {
-                // Schemas expand via 'l'; columns have no open action yet.
+            tree_pane::LineKind::Schema { .. }
+            | tree_pane::LineKind::Column { .. }
+            | tree_pane::LineKind::Detail => {
+                // Schemas expand via 'l'; columns/details have no open action.
             }
         }
     }
@@ -494,10 +503,10 @@ impl App {
                 table,
             } => {
                 if !self.tree.is_table_expanded(conn, schema, table) {
-                    self.expand_table(conn, schema, table);
+                    self.expand_table(conn, schema, table, tx);
                 }
             }
-            tree_pane::LineKind::Column { .. } => {}
+            tree_pane::LineKind::Column { .. } | tree_pane::LineKind::Detail => {}
         }
     }
 
@@ -534,7 +543,7 @@ impl App {
                     self.tree.set_table_expanded(conn, schema, table, false);
                 }
             }
-            tree_pane::LineKind::Column { .. } => {}
+            tree_pane::LineKind::Column { .. } | tree_pane::LineKind::Detail => {}
         }
     }
 
@@ -639,6 +648,35 @@ impl App {
             AppMsg::QueryError(error) => {
                 tracing::warn!("query error: {}", error);
                 self.last_error = Some(error);
+            }
+            AppMsg::TableDetailLoaded {
+                conn,
+                schema,
+                table,
+                detail,
+            } => {
+                let indexes = detail
+                    .indexes
+                    .iter()
+                    .map(|i| {
+                        let unique = if i.unique { " UNIQUE" } else { "" };
+                        format!("⚿ {} ({}){}", i.name, i.columns.join(", "), unique)
+                    })
+                    .collect();
+                let foreign_keys = detail
+                    .foreign_keys
+                    .iter()
+                    .map(|f| {
+                        format!(
+                            "→ {} → {}({})",
+                            f.columns.join(", "),
+                            f.ref_table,
+                            f.ref_columns.join(", ")
+                        )
+                    })
+                    .collect();
+                self.tree
+                    .set_table_detail(conn, schema, table, indexes, foreign_keys);
             }
             AppMsg::CommitResult(Ok(affected)) => {
                 tracing::info!("commit affected {affected} rows");
@@ -746,10 +784,17 @@ impl App {
             .map(|c| c.driver)
     }
 
-    /// Expand a table node, filling its column children from cached metadata.
-    fn expand_table(&mut self, conn: usize, schema: usize, table: usize) {
+    /// Expand a table node: fill column children from cached metadata (sync)
+    /// and lazily load index/FK detail (async, once).
+    fn expand_table(
+        &mut self,
+        conn: usize,
+        schema: usize,
+        table: usize,
+        tx: &UnboundedSender<AppMsg>,
+    ) {
+        let conn_name = self.tree.connections[conn].name.clone();
         if !self.tree.table_has_columns(conn, schema, table) {
-            let conn_name = self.tree.connections[conn].name.clone();
             if let (Some(schema_name), Some(table_name)) = (
                 self.tree.schema_name(conn, schema),
                 self.tree.table_name(conn, schema, table),
@@ -773,6 +818,31 @@ impl App {
             }
         }
         self.tree.set_table_expanded(conn, schema, table, true);
+
+        // Lazily load indexes/FKs the first time the table is expanded.
+        if !self.tree.table_detail_loaded(conn, schema, table) {
+            if let (Some(schema_name), Some(table_name), Some(driver), Some(executor)) = (
+                self.tree.schema_name(conn, schema),
+                self.tree.table_name(conn, schema, table),
+                self.driver_for(&conn_name),
+                self.executors.get(&conn_name).cloned(),
+            ) {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    if let Ok(detail) = executor
+                        .introspect_table_detail(driver, &schema_name, &table_name)
+                        .await
+                    {
+                        let _ = tx.send(AppMsg::TableDetailLoaded {
+                            conn,
+                            schema,
+                            table,
+                            detail,
+                        });
+                    }
+                });
+            }
+        }
     }
 
     /// Browse a table's rows: run `SELECT * FROM <table> LIMIT 500` and show
@@ -1600,7 +1670,8 @@ mod tests {
         let mut app = app_with_users_table();
         assert!(!app.tree.is_table_expanded(0, 0, 0));
 
-        app.expand_table(0, 0, 0);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.expand_table(0, 0, 0, &tx);
 
         assert!(app.tree.is_table_expanded(0, 0, 0));
         assert!(app.tree.table_has_columns(0, 0, 0));

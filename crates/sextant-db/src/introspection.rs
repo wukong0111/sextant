@@ -34,6 +34,30 @@ pub struct TableMeta {
     pub primary_key: Vec<String>,
 }
 
+/// An index on a table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexMeta {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+}
+
+/// A foreign key from a table to another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignKeyMeta {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+}
+
+/// Per-table indexes and foreign keys, loaded lazily when a table is expanded.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TableDetail {
+    pub indexes: Vec<IndexMeta>,
+    pub foreign_keys: Vec<ForeignKeyMeta>,
+}
+
 impl SqlxExecutor {
     /// List schemas and their tables for this executor.
     ///
@@ -390,6 +414,275 @@ impl SqlxExecutor {
 
         Ok(out)
     }
+
+    /// Load indexes and foreign keys for a single table (lazy, on expand).
+    pub async fn introspect_table_detail(
+        &self,
+        driver: Driver,
+        schema: &str,
+        table: &str,
+    ) -> Result<TableDetail, SextantError> {
+        match driver {
+            Driver::Postgres => self.detail_postgres(schema, table).await,
+            Driver::Mysql => self.detail_mysql(schema, table).await,
+            Driver::Sqlite => self.detail_sqlite(schema, table).await,
+        }
+    }
+
+    async fn detail_postgres(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Result<TableDetail, SextantError> {
+        let DbPool::Postgres(pool) = self.pool() else {
+            return Err(SextantError::Database("expected postgres pool".to_string()));
+        };
+
+        let idx_rows = sqlx::query::<sqlx::Postgres>(
+            "SELECT i.relname AS index_name, ix.indisunique AS is_unique, a.attname AS column_name \
+             FROM pg_class t \
+             JOIN pg_namespace n ON n.oid = t.relnamespace \
+             JOIN pg_index ix ON ix.indrelid = t.oid \
+             JOIN pg_class i ON i.oid = ix.indexrelid \
+             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey) \
+             WHERE n.nspname = $1 AND t.relname = $2 \
+             ORDER BY i.relname, array_position(ix.indkey::int[], a.attnum)",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SextantError::Database(format!("failed to list indexes: {e}")))?;
+
+        let mut indexes: Vec<IndexMeta> = Vec::new();
+        for row in &idx_rows {
+            let name: String = row
+                .try_get("index_name")
+                .map_err(|e| SextantError::Database(format!("failed to read index: {e}")))?;
+            let unique: bool = row.try_get("is_unique").unwrap_or(false);
+            let column: String = row
+                .try_get("column_name")
+                .map_err(|e| SextantError::Database(format!("failed to read index col: {e}")))?;
+            append_index(&mut indexes, name, column, unique);
+        }
+
+        let fk_rows = sqlx::query::<sqlx::Postgres>(
+            "SELECT tc.constraint_name, kcu.column_name, ccu.table_name AS ref_table, \
+                    ccu.column_name AS ref_column \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu \
+               ON tc.constraint_name = kcu.constraint_name \
+              AND tc.table_schema = kcu.table_schema \
+             JOIN information_schema.constraint_column_usage ccu \
+               ON ccu.constraint_name = tc.constraint_name \
+              AND ccu.table_schema = tc.table_schema \
+             WHERE tc.constraint_type = 'FOREIGN KEY' \
+               AND tc.table_schema = $1 AND tc.table_name = $2 \
+             ORDER BY tc.constraint_name",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SextantError::Database(format!("failed to list foreign keys: {e}")))?;
+
+        let mut foreign_keys: Vec<ForeignKeyMeta> = Vec::new();
+        for row in &fk_rows {
+            append_fk(
+                &mut foreign_keys,
+                read_str(row, "constraint_name")?,
+                read_str(row, "column_name")?,
+                read_str(row, "ref_table")?,
+                read_str(row, "ref_column")?,
+            );
+        }
+
+        Ok(TableDetail {
+            indexes,
+            foreign_keys,
+        })
+    }
+
+    async fn detail_mysql(&self, schema: &str, table: &str) -> Result<TableDetail, SextantError> {
+        let DbPool::MySql(pool) = self.pool() else {
+            return Err(SextantError::Database("expected mysql pool".to_string()));
+        };
+
+        let idx_rows = sqlx::query::<sqlx::MySql>(
+            "SELECT index_name AS `index_name`, non_unique AS `non_unique`, \
+                    column_name AS `column_name` \
+             FROM information_schema.statistics \
+             WHERE table_schema = ? AND table_name = ? \
+             ORDER BY index_name, seq_in_index",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SextantError::Database(format!("failed to list indexes: {e}")))?;
+
+        let mut indexes: Vec<IndexMeta> = Vec::new();
+        for row in &idx_rows {
+            let non_unique: i32 = row.try_get("non_unique").unwrap_or(1);
+            append_index(
+                &mut indexes,
+                read_str(row, "index_name")?,
+                read_str(row, "column_name")?,
+                non_unique == 0,
+            );
+        }
+
+        let fk_rows = sqlx::query::<sqlx::MySql>(
+            "SELECT constraint_name AS `constraint_name`, column_name AS `column_name`, \
+                    referenced_table_name AS `ref_table`, referenced_column_name AS `ref_column` \
+             FROM information_schema.key_column_usage \
+             WHERE table_schema = ? AND table_name = ? AND referenced_table_name IS NOT NULL \
+             ORDER BY constraint_name, ordinal_position",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SextantError::Database(format!("failed to list foreign keys: {e}")))?;
+
+        let mut foreign_keys: Vec<ForeignKeyMeta> = Vec::new();
+        for row in &fk_rows {
+            append_fk(
+                &mut foreign_keys,
+                read_str(row, "constraint_name")?,
+                read_str(row, "column_name")?,
+                read_str(row, "ref_table")?,
+                read_str(row, "ref_column")?,
+            );
+        }
+
+        Ok(TableDetail {
+            indexes,
+            foreign_keys,
+        })
+    }
+
+    async fn detail_sqlite(&self, schema: &str, table: &str) -> Result<TableDetail, SextantError> {
+        let DbPool::Sqlite(pool) = self.pool() else {
+            return Err(SextantError::Database("expected sqlite pool".to_string()));
+        };
+
+        let list_sql = format!("PRAGMA \"{schema}\".index_list(\"{table}\")");
+        let list_rows = sqlx::query::<sqlx::Sqlite>(sqlx::AssertSqlSafe(list_sql))
+            .fetch_all(pool)
+            .await
+            .map_err(|e| SextantError::Database(format!("failed to list indexes: {e}")))?;
+
+        let mut indexes: Vec<IndexMeta> = Vec::new();
+        for row in &list_rows {
+            let name: String = row
+                .try_get("name")
+                .map_err(|e| SextantError::Database(format!("failed to read index: {e}")))?;
+            let unique: i64 = row.try_get("unique").unwrap_or(0);
+
+            let info_sql = format!("PRAGMA \"{schema}\".index_info(\"{name}\")");
+            let info_rows = sqlx::query::<sqlx::Sqlite>(sqlx::AssertSqlSafe(info_sql))
+                .fetch_all(pool)
+                .await
+                .map_err(|e| SextantError::Database(format!("failed to read index_info: {e}")))?;
+            let columns = info_rows
+                .iter()
+                .filter_map(|r| r.try_get::<Option<String>, _>("name").ok().flatten())
+                .collect();
+
+            indexes.push(IndexMeta {
+                name,
+                columns,
+                unique: unique != 0,
+            });
+        }
+
+        let fk_sql = format!("PRAGMA \"{schema}\".foreign_key_list(\"{table}\")");
+        let fk_rows = sqlx::query::<sqlx::Sqlite>(sqlx::AssertSqlSafe(fk_sql))
+            .fetch_all(pool)
+            .await
+            .map_err(|e| SextantError::Database(format!("failed to list foreign keys: {e}")))?;
+
+        let mut foreign_keys: Vec<ForeignKeyMeta> = Vec::new();
+        let mut current_id: Option<i64> = None;
+        for row in &fk_rows {
+            let id: i64 = row.try_get("id").unwrap_or(0);
+            let ref_table = read_str(row, "table")?;
+            let from = read_str(row, "from")?;
+            let to = row
+                .try_get::<Option<String>, _>("to")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if current_id == Some(id) {
+                if let Some(last) = foreign_keys.last_mut() {
+                    last.columns.push(from);
+                    last.ref_columns.push(to);
+                }
+            } else {
+                current_id = Some(id);
+                foreign_keys.push(ForeignKeyMeta {
+                    name: format!("fk_{id}"),
+                    columns: vec![from],
+                    ref_table,
+                    ref_columns: vec![to],
+                });
+            }
+        }
+
+        Ok(TableDetail {
+            indexes,
+            foreign_keys,
+        })
+    }
+}
+
+/// Read a required string column, mapping decode errors to `SextantError`.
+fn read_str<R: Row>(row: &R, name: &str) -> Result<String, SextantError>
+where
+    for<'a> String: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> &'a str: sqlx::ColumnIndex<R>,
+{
+    row.try_get(name)
+        .map_err(|e| SextantError::Database(format!("failed to read {name}: {e}")))
+}
+
+/// Append an index row, grouping consecutive rows that share an index name.
+fn append_index(indexes: &mut Vec<IndexMeta>, name: String, column: String, unique: bool) {
+    if let Some(last) = indexes.last_mut() {
+        if last.name == name {
+            last.columns.push(column);
+            return;
+        }
+    }
+    indexes.push(IndexMeta {
+        name,
+        columns: vec![column],
+        unique,
+    });
+}
+
+/// Append an FK row, grouping consecutive rows that share a constraint name.
+fn append_fk(
+    fks: &mut Vec<ForeignKeyMeta>,
+    name: String,
+    column: String,
+    ref_table: String,
+    ref_column: String,
+) {
+    if let Some(last) = fks.last_mut() {
+        if last.name == name {
+            last.columns.push(column);
+            last.ref_columns.push(ref_column);
+            return;
+        }
+    }
+    fks.push(ForeignKeyMeta {
+        name,
+        columns: vec![column],
+        ref_table,
+        ref_columns: vec![ref_column],
+    });
 }
 
 /// Merge a per-table column map with a per-table primary-key map, marking PK
@@ -556,5 +849,41 @@ mod tests {
         let (_, meta) = &tables[0];
         assert!(meta.primary_key.is_empty());
         assert!(meta.columns.iter().all(|c| !c.is_primary_key));
+    }
+
+    #[tokio::test]
+    async fn sqlite_table_detail_indexes_and_fks() {
+        let exec = sqlite_executor().await;
+        exec.execute("CREATE TABLE dept (id INTEGER PRIMARY KEY)")
+            .await
+            .unwrap();
+        exec.execute(
+            "CREATE TABLE emp (id INTEGER PRIMARY KEY, dept_id INTEGER, name TEXT, \
+             FOREIGN KEY (dept_id) REFERENCES dept(id))",
+        )
+        .await
+        .unwrap();
+        exec.execute("CREATE UNIQUE INDEX idx_emp_name ON emp(name)")
+            .await
+            .unwrap();
+
+        let detail = exec
+            .introspect_table_detail(Driver::Sqlite, "main", "emp")
+            .await
+            .unwrap();
+
+        let idx = detail
+            .indexes
+            .iter()
+            .find(|i| i.name == "idx_emp_name")
+            .expect("idx_emp_name present");
+        assert_eq!(idx.columns, vec!["name"]);
+        assert!(idx.unique);
+
+        assert_eq!(detail.foreign_keys.len(), 1);
+        let fk = &detail.foreign_keys[0];
+        assert_eq!(fk.columns, vec!["dept_id"]);
+        assert_eq!(fk.ref_table, "dept");
+        assert_eq!(fk.ref_columns, vec!["id"]);
     }
 }

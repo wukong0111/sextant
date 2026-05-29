@@ -503,4 +503,97 @@ mod tests {
         let _ = exec.execute("DROP TABLE IF EXISTS cols_test").await;
         let _ = exec.execute("DROP TABLE IF EXISTS comp_test").await;
     }
+
+    #[tokio::test]
+    async fn postgresql_table_detail_integration() {
+        let url = std::env::var("SEXTANT_TEST_PG_URL").unwrap_or_default();
+        if url.is_empty() {
+            return;
+        }
+
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let exec = SqlxExecutor::new(DbPool::Postgres(pool));
+
+        cleanup_pg_schema(&exec).await;
+        exec.execute("CREATE TABLE dept (id INT PRIMARY KEY)")
+            .await
+            .unwrap();
+        exec.execute(
+            "CREATE TABLE emp (id INT PRIMARY KEY, dept_id INT REFERENCES dept(id), name TEXT)",
+        )
+        .await
+        .unwrap();
+        exec.execute("CREATE UNIQUE INDEX idx_emp_name ON emp(name)")
+            .await
+            .unwrap();
+
+        let detail = exec
+            .introspect_table_detail(Driver::Postgres, "public", "emp")
+            .await
+            .unwrap();
+
+        assert!(
+            detail
+                .indexes
+                .iter()
+                .any(|i| i.name == "idx_emp_name" && i.columns == vec!["name"] && i.unique)
+        );
+        let fk = detail
+            .foreign_keys
+            .iter()
+            .find(|f| f.columns == vec!["dept_id"])
+            .expect("fk present");
+        assert_eq!(fk.ref_table, "dept");
+        assert_eq!(fk.ref_columns, vec!["id"]);
+
+        let _ = exec.execute("DROP TABLE IF EXISTS emp").await;
+        let _ = exec.execute("DROP TABLE IF EXISTS dept").await;
+    }
+
+    #[tokio::test]
+    async fn mysql_table_detail_integration() {
+        let url = std::env::var("SEXTANT_TEST_MYSQL_URL").unwrap_or_default();
+        if url.is_empty() {
+            return;
+        }
+
+        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
+        let exec = SqlxExecutor::new(DbPool::MySql(pool));
+
+        cleanup_mysql_schema(&exec).await;
+        exec.execute("CREATE TABLE dept (id INT PRIMARY KEY)")
+            .await
+            .unwrap();
+        exec.execute(
+            "CREATE TABLE emp (id INT PRIMARY KEY, dept_id INT, name VARCHAR(50), \
+             FOREIGN KEY (dept_id) REFERENCES dept(id))",
+        )
+        .await
+        .unwrap();
+        exec.execute("CREATE UNIQUE INDEX idx_emp_name ON emp(name)")
+            .await
+            .unwrap();
+
+        let detail = exec
+            .introspect_table_detail(Driver::Mysql, "sextant_test", "emp")
+            .await
+            .unwrap();
+
+        assert!(
+            detail
+                .indexes
+                .iter()
+                .any(|i| i.name == "idx_emp_name" && i.columns == vec!["name"] && i.unique)
+        );
+        let fk = detail
+            .foreign_keys
+            .iter()
+            .find(|f| f.columns == vec!["dept_id"])
+            .expect("fk present");
+        assert_eq!(fk.ref_table, "dept");
+        assert_eq!(fk.ref_columns, vec!["id"]);
+
+        let _ = exec.execute("DROP TABLE IF EXISTS emp").await;
+        let _ = exec.execute("DROP TABLE IF EXISTS dept").await;
+    }
 }
