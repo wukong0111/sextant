@@ -1,4 +1,4 @@
-//! Sidebar tree pane for connections, schemas and tables.
+//! Sidebar tree pane for connections, schemas, tables and columns.
 
 use ratatui::{
     Frame,
@@ -7,12 +7,40 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
 };
 
+/// A column node shown under an expanded table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnNode {
+    pub name: String,
+    pub type_name: String,
+    pub is_pk: bool,
+}
+
+/// A table inside a schema. Columns are filled lazily when the table is first
+/// expanded (from the connection's cached metadata).
+#[derive(Debug, Clone)]
+pub struct TableItem {
+    pub name: String,
+    pub expanded: bool,
+    pub columns: Vec<ColumnNode>,
+}
+
+impl TableItem {
+    /// Create a collapsed table with no columns loaded yet.
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            expanded: false,
+            columns: Vec::new(),
+        }
+    }
+}
+
 /// A schema with its tables inside the tree.
 #[derive(Debug, Clone)]
 pub struct SchemaItem {
     pub name: String,
     pub expanded: bool,
-    pub tables: Vec<String>,
+    pub tables: Vec<TableItem>,
 }
 
 /// Connection state within the tree.
@@ -37,7 +65,9 @@ pub struct ConnectionItem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
-    Connection,
+    Connection {
+        conn: usize,
+    },
     Schema {
         conn: usize,
         schema: usize,
@@ -46,6 +76,12 @@ pub enum LineKind {
         conn: usize,
         schema: usize,
         table: usize,
+    },
+    Column {
+        conn: usize,
+        schema: usize,
+        table: usize,
+        col: usize,
     },
 }
 
@@ -97,51 +133,34 @@ impl TreePane {
         self.visible_lines().get(self.selected).map(|l| l.kind)
     }
 
-    /// Toggle expand/collapse on the selected connection or schema.
+    /// Toggle expand/collapse on the selected connection, schema or table.
     pub fn toggle_selected(&mut self) {
-        let lines = self.visible_lines();
-        let Some(line) = lines.get(self.selected) else {
+        let Some(kind) = self.selected_kind() else {
             return;
         };
-        match line.kind {
-            LineKind::Connection => {
-                // Count connections up to this point to find index.
-                let mut conn_idx = 0;
-                let mut line_idx = 0;
-                for (i, c) in self.connections.iter().enumerate() {
-                    if line_idx == self.selected {
-                        conn_idx = i;
-                        break;
+        match kind {
+            LineKind::Connection { conn } => {
+                if let Some(c) = self.connections.get_mut(conn) {
+                    if let ConnState::Connected { expanded, .. } = &mut c.state {
+                        *expanded = !*expanded;
                     }
-                    line_idx += 1;
-                    if let ConnState::Connected {
-                        expanded: true,
-                        schemas,
-                    } = &c.state
-                    {
-                        for s in schemas {
-                            line_idx += 1;
-                            if s.expanded {
-                                line_idx += s.tables.len();
-                            }
-                        }
-                    }
-                }
-                if let ConnState::Connected { expanded, .. } = &mut self.connections[conn_idx].state
-                {
-                    *expanded = !*expanded;
                 }
             }
             LineKind::Schema { conn, schema } => {
-                if let Some(c) = self.connections.get_mut(conn) {
-                    if let ConnState::Connected { schemas, .. } = &mut c.state {
-                        if let Some(s) = schemas.get_mut(schema) {
-                            s.expanded = !s.expanded;
-                        }
-                    }
+                if let Some(s) = self.schema_mut(conn, schema) {
+                    s.expanded = !s.expanded;
                 }
             }
-            LineKind::Table { .. } => {}
+            LineKind::Table {
+                conn,
+                schema,
+                table,
+            } => {
+                if let Some(t) = self.table_mut(conn, schema, table) {
+                    t.expanded = !t.expanded;
+                }
+            }
+            LineKind::Column { .. } => {}
         }
     }
 
@@ -169,40 +188,76 @@ impl TreePane {
         }
     }
 
-    /// Return the connection index if the current selection is a connection line.
-    pub fn selected_connection_index(&self) -> Option<usize> {
-        let lines = self.visible_lines();
-        let line = lines.get(self.selected)?;
-        if !matches!(line.kind, LineKind::Connection) {
-            return None;
-        }
-        let mut conn_idx = 0;
-        let mut line_idx = 0;
-        for (i, c) in self.connections.iter().enumerate() {
-            if line_idx == self.selected {
-                conn_idx = i;
-                break;
-            }
-            line_idx += 1;
-            if let ConnState::Connected {
-                expanded: true,
-                schemas,
-            } = &c.state
-            {
-                for s in schemas {
-                    line_idx += 1;
-                    if s.expanded {
-                        line_idx += s.tables.len();
-                    }
-                }
-            }
-        }
-        Some(conn_idx)
-    }
-
     /// Find the index of a connection by name.
     pub fn connection_index_by_name(&self, name: &str) -> Option<usize> {
         self.connections.iter().position(|c| c.name == name)
+    }
+
+    /// Name of the schema at `(conn, schema)`, if connected.
+    pub fn schema_name(&self, conn: usize, schema: usize) -> Option<String> {
+        self.schema_ref(conn, schema).map(|s| s.name.clone())
+    }
+
+    /// Name of the table at `(conn, schema, table)`, if connected.
+    pub fn table_name(&self, conn: usize, schema: usize, table: usize) -> Option<String> {
+        self.table_ref(conn, schema, table).map(|t| t.name.clone())
+    }
+
+    /// Whether the table at `(conn, schema, table)` is currently expanded.
+    pub fn is_table_expanded(&self, conn: usize, schema: usize, table: usize) -> bool {
+        self.table_ref(conn, schema, table)
+            .map(|t| t.expanded)
+            .unwrap_or(false)
+    }
+
+    /// Set the expanded flag on a table.
+    pub fn set_table_expanded(&mut self, conn: usize, schema: usize, table: usize, expanded: bool) {
+        if let Some(t) = self.table_mut(conn, schema, table) {
+            t.expanded = expanded;
+        }
+    }
+
+    /// Whether the table already has its columns loaded.
+    pub fn table_has_columns(&self, conn: usize, schema: usize, table: usize) -> bool {
+        self.table_ref(conn, schema, table)
+            .map(|t| !t.columns.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Replace a table's column nodes (filled from cached metadata on expand).
+    pub fn set_table_columns(
+        &mut self,
+        conn: usize,
+        schema: usize,
+        table: usize,
+        columns: Vec<ColumnNode>,
+    ) {
+        if let Some(t) = self.table_mut(conn, schema, table) {
+            t.columns = columns;
+        }
+    }
+
+    fn schema_ref(&self, conn: usize, schema: usize) -> Option<&SchemaItem> {
+        let ConnState::Connected { schemas, .. } = &self.connections.get(conn)?.state else {
+            return None;
+        };
+        schemas.get(schema)
+    }
+
+    fn schema_mut(&mut self, conn: usize, schema: usize) -> Option<&mut SchemaItem> {
+        let ConnState::Connected { schemas, .. } = &mut self.connections.get_mut(conn)?.state
+        else {
+            return None;
+        };
+        schemas.get_mut(schema)
+    }
+
+    fn table_ref(&self, conn: usize, schema: usize, table: usize) -> Option<&TableItem> {
+        self.schema_ref(conn, schema)?.tables.get(table)
+    }
+
+    fn table_mut(&mut self, conn: usize, schema: usize, table: usize) -> Option<&mut TableItem> {
+        self.schema_mut(conn, schema)?.tables.get_mut(table)
     }
 
     fn visible_lines(&self) -> Vec<Line> {
@@ -218,7 +273,7 @@ impl TreePane {
                 ConnState::Error(_) => "! ",
             };
             lines.push(Line {
-                kind: LineKind::Connection,
+                kind: LineKind::Connection { conn: ci },
                 text: format!("{}{}", prefix, conn.name),
             });
 
@@ -228,23 +283,42 @@ impl TreePane {
             } = &conn.state
             {
                 for (si, schema) in schemas.iter().enumerate() {
+                    let s_prefix = if schema.expanded { "v" } else { ">" };
                     lines.push(Line {
                         kind: LineKind::Schema {
                             conn: ci,
                             schema: si,
                         },
-                        text: format!("  {}", schema.name),
+                        text: format!("  {} {}", s_prefix, schema.name),
                     });
                     if schema.expanded {
                         for (ti, table) in schema.tables.iter().enumerate() {
+                            let t_prefix = if table.expanded { "v" } else { ">" };
                             lines.push(Line {
                                 kind: LineKind::Table {
                                     conn: ci,
                                     schema: si,
                                     table: ti,
                                 },
-                                text: format!("    {}", table),
+                                text: format!("    {} {}", t_prefix, table.name),
                             });
+                            if table.expanded {
+                                for (coli, col) in table.columns.iter().enumerate() {
+                                    let pk = if col.is_pk { " PK" } else { "" };
+                                    lines.push(Line {
+                                        kind: LineKind::Column {
+                                            conn: ci,
+                                            schema: si,
+                                            table: ti,
+                                            col: coli,
+                                        },
+                                        text: format!(
+                                            "        {} {}{}",
+                                            col.name, col.type_name, pk
+                                        ),
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -277,6 +351,13 @@ impl TreePane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tables(names: &[&str]) -> Vec<TableItem> {
+        names
+            .iter()
+            .map(|n| TableItem::new((*n).to_string()))
+            .collect()
+    }
 
     #[test]
     fn new_tree_pane() {
@@ -318,12 +399,12 @@ mod tests {
                 SchemaItem {
                     name: "public".into(),
                     expanded: true,
-                    tables: vec!["users".into(), "orders".into()],
+                    tables: tables(&["users", "orders"]),
                 },
                 SchemaItem {
                     name: "auth".into(),
                     expanded: false,
-                    tables: vec!["accounts".into()],
+                    tables: tables(&["accounts"]),
                 },
             ],
         );
@@ -331,10 +412,10 @@ mod tests {
         let lines = tree.visible_lines();
         assert_eq!(lines.len(), 5); // conn, public, users, orders, auth
         assert_eq!(lines[0].text, "v conn");
-        assert_eq!(lines[1].text, "  public");
-        assert_eq!(lines[2].text, "    users");
-        assert_eq!(lines[3].text, "    orders");
-        assert_eq!(lines[4].text, "  auth");
+        assert_eq!(lines[1].text, "  v public");
+        assert_eq!(lines[2].text, "    > users");
+        assert_eq!(lines[3].text, "    > orders");
+        assert_eq!(lines[4].text, "  > auth");
     }
 
     #[test]
@@ -345,7 +426,7 @@ mod tests {
             vec![SchemaItem {
                 name: "public".into(),
                 expanded: false,
-                tables: vec!["users".into()],
+                tables: tables(&["users"]),
             }],
         );
         assert_eq!(tree.visible_lines().len(), 2); // conn + public
@@ -370,7 +451,7 @@ mod tests {
             vec![SchemaItem {
                 name: "public".into(),
                 expanded: false,
-                tables: vec!["users".into()],
+                tables: tables(&["users"]),
             }],
         );
         tree.selected = 1; // public schema line
@@ -380,10 +461,61 @@ mod tests {
     }
 
     #[test]
-    fn selected_connection_index() {
-        let mut tree = TreePane::new(vec!["a".into(), "b".into()]);
-        assert_eq!(tree.selected_connection_index(), Some(0));
-        tree.selected = 1;
-        assert_eq!(tree.selected_connection_index(), Some(1));
+    fn expand_table_shows_columns() {
+        let mut tree = TreePane::new(vec!["conn".into()]);
+        tree.set_connected(
+            0,
+            vec![SchemaItem {
+                name: "public".into(),
+                expanded: true,
+                tables: tables(&["users"]),
+            }],
+        );
+        // Table line is at index 2 (conn, public, users).
+        tree.set_table_columns(
+            0,
+            0,
+            0,
+            vec![
+                ColumnNode {
+                    name: "id".into(),
+                    type_name: "integer".into(),
+                    is_pk: true,
+                },
+                ColumnNode {
+                    name: "name".into(),
+                    type_name: "text".into(),
+                    is_pk: false,
+                },
+            ],
+        );
+        assert!(!tree.is_table_expanded(0, 0, 0));
+        tree.set_table_expanded(0, 0, 0, true);
+        assert!(tree.is_table_expanded(0, 0, 0));
+
+        let lines = tree.visible_lines();
+        // conn, public, users, <id>, <name>
+        assert_eq!(lines.len(), 5);
+        assert!(lines[3].text.contains("id"));
+        assert!(lines[3].text.contains("PK"));
+        assert!(lines[4].text.contains("name"));
+        assert!(!lines[4].text.contains("PK"));
+        assert!(matches!(lines[3].kind, LineKind::Column { col: 0, .. }));
+    }
+
+    #[test]
+    fn table_accessors() {
+        let mut tree = TreePane::new(vec!["conn".into()]);
+        tree.set_connected(
+            0,
+            vec![SchemaItem {
+                name: "public".into(),
+                expanded: true,
+                tables: tables(&["users"]),
+            }],
+        );
+        assert_eq!(tree.schema_name(0, 0).as_deref(), Some("public"));
+        assert_eq!(tree.table_name(0, 0, 0).as_deref(), Some("users"));
+        assert!(!tree.table_has_columns(0, 0, 0));
     }
 }

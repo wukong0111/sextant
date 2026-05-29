@@ -22,7 +22,7 @@ mod editor_modal;
 use editor_modal::{EditorAction, EditorModal};
 
 mod tree_pane;
-use tree_pane::{ConnState, SchemaItem, TreePane};
+use tree_pane::{ColumnNode, ConnState, SchemaItem, TableItem, TreePane};
 
 mod result_grid;
 use result_grid::ResultGrid;
@@ -315,6 +315,11 @@ impl App {
                 self.pending_leader = false;
                 self.pending_g = false;
             }
+            KeyCode::Char('D') if key.modifiers.is_empty() && self.focus == Focus::Tree => {
+                self.emit_table_ddl();
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
             _ => {
                 self.pending_leader = false;
                 self.pending_g = false;
@@ -336,21 +341,25 @@ impl App {
         };
 
         match kind {
-            tree_pane::LineKind::Connection => {
-                let Some(conn_idx) = self.tree.selected_connection_index() else {
-                    return;
-                };
-                let state = &self.tree.connections[conn_idx].state;
+            tree_pane::LineKind::Connection { conn } => {
+                let state = &self.tree.connections[conn].state;
                 match state {
                     ConnState::Disconnected | ConnState::Error(_) => {
-                        let name = self.tree.connections[conn_idx].name.clone();
-                        self.start_connection(&name, conn_idx, tx);
+                        let name = self.tree.connections[conn].name.clone();
+                        self.start_connection(&name, conn, tx);
                     }
                     ConnState::Connected { .. } | ConnState::Connecting => {}
                 }
             }
-            tree_pane::LineKind::Schema { .. } | tree_pane::LineKind::Table { .. } => {
-                // No-op for v0.1; expand/collapse is handled by 'l'.
+            tree_pane::LineKind::Table {
+                conn,
+                schema,
+                table,
+            } => {
+                self.browse_table(conn, schema, table, tx);
+            }
+            tree_pane::LineKind::Schema { .. } | tree_pane::LineKind::Column { .. } => {
+                // Schemas expand via 'l'; columns have no open action yet.
             }
         }
     }
@@ -361,14 +370,11 @@ impl App {
         };
 
         match kind {
-            tree_pane::LineKind::Connection => {
-                let Some(conn_idx) = self.tree.selected_connection_index() else {
-                    return;
-                };
-                let name = self.tree.connections[conn_idx].name.clone();
-                match &self.tree.connections[conn_idx].state {
+            tree_pane::LineKind::Connection { conn } => {
+                let name = self.tree.connections[conn].name.clone();
+                match &self.tree.connections[conn].state {
                     ConnState::Disconnected | ConnState::Error(_) => {
-                        self.start_connection(&name, conn_idx, tx);
+                        self.start_connection(&name, conn, tx);
                     }
                     ConnState::Connected { expanded, .. } => {
                         self.connection_name = Some(name);
@@ -390,7 +396,16 @@ impl App {
                     }
                 }
             }
-            tree_pane::LineKind::Table { .. } => {}
+            tree_pane::LineKind::Table {
+                conn,
+                schema,
+                table,
+            } => {
+                if !self.tree.is_table_expanded(conn, schema, table) {
+                    self.expand_table(conn, schema, table);
+                }
+            }
+            tree_pane::LineKind::Column { .. } => {}
         }
     }
 
@@ -400,12 +415,9 @@ impl App {
         };
 
         match kind {
-            tree_pane::LineKind::Connection => {
-                let Some(conn_idx) = self.tree.selected_connection_index() else {
-                    return;
-                };
+            tree_pane::LineKind::Connection { conn } => {
                 if let ConnState::Connected { expanded: true, .. } =
-                    &self.tree.connections[conn_idx].state
+                    &self.tree.connections[conn].state
                 {
                     self.tree.toggle_selected();
                 }
@@ -421,7 +433,16 @@ impl App {
                     }
                 }
             }
-            tree_pane::LineKind::Table { .. } => {}
+            tree_pane::LineKind::Table {
+                conn,
+                schema,
+                table,
+            } => {
+                if self.tree.is_table_expanded(conn, schema, table) {
+                    self.tree.set_table_expanded(conn, schema, table, false);
+                }
+            }
+            tree_pane::LineKind::Column { .. } => {}
         }
     }
 
@@ -499,7 +520,7 @@ impl App {
                     .map(|s| SchemaItem {
                         name: s.name,
                         expanded: true,
-                        tables: s.tables,
+                        tables: s.tables.into_iter().map(TableItem::new).collect(),
                     })
                     .collect();
 
@@ -559,23 +580,27 @@ impl App {
 
     fn run_editor_sql(&mut self, tx: &UnboundedSender<AppMsg>) {
         let sql = self.editor.content();
-        tracing::info!("run_editor_sql: sql='{}'", sql.trim());
         let Some(name) = self.connection_name.clone() else {
             tracing::warn!("run_editor_sql: no connection_name");
             return;
         };
-        tracing::info!("run_editor_sql: connection_name='{}'", name);
-        let Some(executor) = self.executors.get(&name).cloned() else {
+        self.run_sql(&name, sql, tx);
+    }
+
+    /// Spawn a query against the named connection's executor; the result is
+    /// delivered back through the channel as `QueryResult`/`QueryError`.
+    fn run_sql(&mut self, conn_name: &str, sql: String, tx: &UnboundedSender<AppMsg>) {
+        tracing::info!("run_sql: conn='{}', sql='{}'", conn_name, sql.trim());
+        let Some(executor) = self.executors.get(conn_name).cloned() else {
             tracing::warn!(
-                "run_editor_sql: no executor for '{}'. available: {:?}",
-                name,
+                "run_sql: no executor for '{}'. available: {:?}",
+                conn_name,
                 self.executors.keys().collect::<Vec<_>>()
             );
             return;
         };
         self.query_start = Some(Instant::now());
         let tx = tx.clone();
-        tracing::info!("run_editor_sql: spawning query");
         tokio::spawn(async move {
             match executor.execute(&sql).await {
                 Ok(result) => {
@@ -586,6 +611,108 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Driver for a connection by name (from the loaded config).
+    fn driver_for(&self, conn_name: &str) -> Option<sextant_core::Driver> {
+        self.connection_configs
+            .iter()
+            .find(|c| c.name == conn_name)
+            .map(|c| c.driver)
+    }
+
+    /// Expand a table node, filling its column children from cached metadata.
+    fn expand_table(&mut self, conn: usize, schema: usize, table: usize) {
+        if !self.tree.table_has_columns(conn, schema, table) {
+            let conn_name = self.tree.connections[conn].name.clone();
+            if let (Some(schema_name), Some(table_name)) = (
+                self.tree.schema_name(conn, schema),
+                self.tree.table_name(conn, schema, table),
+            ) {
+                if let Some(meta) = self
+                    .table_meta
+                    .get(&conn_name)
+                    .and_then(|m| m.get(&(schema_name, table_name)))
+                {
+                    let columns = meta
+                        .columns
+                        .iter()
+                        .map(|c| ColumnNode {
+                            name: c.name.clone(),
+                            type_name: c.type_name.clone(),
+                            is_pk: c.is_primary_key,
+                        })
+                        .collect();
+                    self.tree.set_table_columns(conn, schema, table, columns);
+                }
+            }
+        }
+        self.tree.set_table_expanded(conn, schema, table, true);
+    }
+
+    /// Browse a table's rows: run `SELECT * FROM <table> LIMIT 500` and show
+    /// the result in the grid, switching focus to it.
+    fn browse_table(
+        &mut self,
+        conn: usize,
+        schema: usize,
+        table: usize,
+        tx: &UnboundedSender<AppMsg>,
+    ) {
+        let conn_name = self.tree.connections[conn].name.clone();
+        let (Some(schema_name), Some(table_name), Some(driver)) = (
+            self.tree.schema_name(conn, schema),
+            self.tree.table_name(conn, schema, table),
+            self.driver_for(&conn_name),
+        ) else {
+            return;
+        };
+
+        let sql = format!(
+            "SELECT * FROM {} LIMIT 500",
+            sextant_db::qualified_table(driver, &schema_name, &table_name)
+        );
+        self.connection_name = Some(conn_name.clone());
+        self.run_sql(&conn_name, sql, tx);
+        self.focus = Focus::Grid;
+    }
+
+    /// Emit a `CREATE TABLE` skeleton for the selected table into the editor.
+    fn emit_table_ddl(&mut self) {
+        let Some(tree_pane::LineKind::Table {
+            conn,
+            schema,
+            table,
+        }) = self.tree.selected_kind()
+        else {
+            return;
+        };
+        let conn_name = self.tree.connections[conn].name.clone();
+        let (Some(schema_name), Some(table_name), Some(driver)) = (
+            self.tree.schema_name(conn, schema),
+            self.tree.table_name(conn, schema, table),
+            self.driver_for(&conn_name),
+        ) else {
+            return;
+        };
+        let Some(meta) = self
+            .table_meta
+            .get(&conn_name)
+            .and_then(|m| m.get(&(schema_name.clone(), table_name.clone())))
+        else {
+            return;
+        };
+        let ddl = sextant_db::generate_create_table(driver, &schema_name, &table_name, meta);
+
+        self.connection_name = Some(conn_name);
+        self.open_editor();
+        let existing = self.editor.content();
+        let combined = if existing.trim().is_empty() {
+            ddl
+        } else {
+            format!("{existing}\n\n{ddl}")
+        };
+        self.editor.set_content(&combined);
     }
 }
 
@@ -1203,5 +1330,82 @@ mod tests {
             }
         }
         assert!(found_one, "should find cell value '1' in rendered grid");
+    }
+
+    /// Build an App whose tree has one connected SQLite connection `c` with a
+    /// `main.users(id PK, name)` table cached in `table_meta`.
+    fn app_with_users_table() -> App {
+        let mut app = test_app();
+        app.tree = TreePane::new(vec!["c".into()]);
+        app.connection_configs = vec![sextant_core::Connection {
+            name: "c".into(),
+            driver: sextant_core::Driver::Sqlite,
+            host: None,
+            port: None,
+            user: None,
+            database: None,
+            ssl_mode: None,
+            path: Some(":memory:".into()),
+            keyring_key: None,
+        }];
+        app.tree.set_connected(
+            0,
+            vec![SchemaItem {
+                name: "main".into(),
+                expanded: true,
+                tables: vec![TableItem::new("users".into())],
+            }],
+        );
+        let mut meta = std::collections::HashMap::new();
+        meta.insert(
+            ("main".to_string(), "users".to_string()),
+            sextant_db::introspection::TableMeta {
+                columns: vec![
+                    sextant_db::introspection::ColumnMeta {
+                        name: "id".into(),
+                        type_name: "INTEGER".into(),
+                        nullable: false,
+                        default: None,
+                        is_primary_key: true,
+                    },
+                    sextant_db::introspection::ColumnMeta {
+                        name: "name".into(),
+                        type_name: "TEXT".into(),
+                        nullable: true,
+                        default: None,
+                        is_primary_key: false,
+                    },
+                ],
+                primary_key: vec!["id".into()],
+            },
+        );
+        app.table_meta.insert("c".into(), meta);
+        app
+    }
+
+    #[test]
+    fn expand_table_fills_columns_from_metadata() {
+        let mut app = app_with_users_table();
+        assert!(!app.tree.is_table_expanded(0, 0, 0));
+
+        app.expand_table(0, 0, 0);
+
+        assert!(app.tree.is_table_expanded(0, 0, 0));
+        assert!(app.tree.table_has_columns(0, 0, 0));
+    }
+
+    #[test]
+    fn d_emits_create_table_ddl_into_editor() {
+        let mut app = app_with_users_table();
+        // Lines: connection(0), schema(1), table(2).
+        app.tree.selected = 2;
+
+        app.emit_table_ddl();
+
+        assert!(app.editor_open);
+        let content = app.editor.content();
+        assert!(content.contains("CREATE TABLE"), "got: {content}");
+        assert!(content.contains("\"users\""), "got: {content}");
+        assert!(content.contains("PRIMARY KEY (\"id\")"), "got: {content}");
     }
 }
