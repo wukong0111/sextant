@@ -319,4 +319,133 @@ mod tests {
             .execute("DROP TABLE IF EXISTS mysql_introspect_test")
             .await;
     }
+
+    #[tokio::test]
+    async fn postgresql_columns_introspection_integration() {
+        let url = std::env::var("SEXTANT_TEST_PG_URL").unwrap_or_default();
+        if url.is_empty() {
+            return; // skip if no test database is configured
+        }
+
+        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let exec = SqlxExecutor::new(DbPool::Postgres(pool));
+
+        cleanup_pg_schema(&exec).await;
+        exec.execute("CREATE TABLE cols_test (id INT PRIMARY KEY, name TEXT NOT NULL, note TEXT)")
+            .await
+            .unwrap();
+        exec.execute("CREATE TABLE comp_test (a INT, b INT, val TEXT, PRIMARY KEY (b, a))")
+            .await
+            .unwrap();
+
+        let tables = exec
+            .introspect_columns(Driver::Postgres, "public")
+            .await
+            .unwrap();
+
+        let (_, cols) = tables
+            .iter()
+            .find(|(t, _)| t == "cols_test")
+            .expect("cols_test present");
+        assert_eq!(cols.primary_key, vec!["id"]);
+        assert!(
+            cols.columns
+                .iter()
+                .find(|c| c.name == "id")
+                .unwrap()
+                .is_primary_key
+        );
+        assert!(
+            !cols
+                .columns
+                .iter()
+                .find(|c| c.name == "name")
+                .unwrap()
+                .nullable
+        );
+        assert!(
+            cols.columns
+                .iter()
+                .find(|c| c.name == "note")
+                .unwrap()
+                .nullable
+        );
+
+        let (_, comp) = tables
+            .iter()
+            .find(|(t, _)| t == "comp_test")
+            .expect("comp_test present");
+        // ORDER BY kcu.ordinal_position must reflect PK declaration order (b, a).
+        assert_eq!(comp.primary_key, vec!["b", "a"]);
+
+        let _ = exec.execute("DROP TABLE IF EXISTS cols_test").await;
+        let _ = exec.execute("DROP TABLE IF EXISTS comp_test").await;
+    }
+
+    #[tokio::test]
+    async fn mysql_columns_introspection_integration() {
+        let url = std::env::var("SEXTANT_TEST_MYSQL_URL").unwrap_or_default();
+        if url.is_empty() {
+            return; // skip if no test database is configured
+        }
+
+        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
+        let exec = SqlxExecutor::new(DbPool::MySql(pool));
+
+        cleanup_mysql_schema(&exec).await;
+        exec.execute(
+            "CREATE TABLE cols_test (id INT PRIMARY KEY, name VARCHAR(50) NOT NULL, note TEXT)",
+        )
+        .await
+        .unwrap();
+        exec.execute("CREATE TABLE comp_test (a INT, b INT, val TEXT, PRIMARY KEY (b, a))")
+            .await
+            .unwrap();
+
+        let tables = exec
+            .introspect_columns(Driver::Mysql, "sextant_test")
+            .await
+            .unwrap();
+
+        let (_, cols) = tables
+            .iter()
+            .find(|(t, _)| t == "cols_test")
+            .expect("cols_test present");
+        assert_eq!(cols.primary_key, vec!["id"]);
+        assert!(
+            cols.columns
+                .iter()
+                .find(|c| c.name == "id")
+                .unwrap()
+                .is_primary_key
+        );
+        assert!(
+            !cols
+                .columns
+                .iter()
+                .find(|c| c.name == "name")
+                .unwrap()
+                .nullable
+        );
+        assert!(
+            cols.columns
+                .iter()
+                .find(|c| c.name == "note")
+                .unwrap()
+                .nullable
+        );
+
+        // MySQL derives PK membership from COLUMN_KEY='PRI' in column order, so we
+        // assert the set of PK columns rather than their key order.
+        let (_, comp) = tables
+            .iter()
+            .find(|(t, _)| t == "comp_test")
+            .expect("comp_test present");
+        let mut pk = comp.primary_key.clone();
+        pk.sort();
+        assert_eq!(pk, vec!["a", "b"]);
+
+        let _ = exec.execute("DROP TABLE IF EXISTS cols_test").await;
+        let _ = exec.execute("DROP TABLE IF EXISTS comp_test").await;
+    }
 }

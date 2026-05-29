@@ -37,6 +37,7 @@ pub enum AppMsg {
         name: String,
         executor: sextant_db::SqlxExecutor,
         schemas: Vec<sextant_db::introspection::Schema>,
+        metadata: std::collections::HashMap<(String, String), sextant_db::introspection::TableMeta>,
     },
     /// Connection failed.
     ConnectionFailed { name: String, error: String },
@@ -90,6 +91,11 @@ pub struct App {
     pending_leader: bool,
     pending_g: bool,
     saved_buffers: std::collections::HashMap<String, String>,
+    /// Column/PK metadata per connection, keyed by `(schema, table)`.
+    table_meta: std::collections::HashMap<
+        String,
+        std::collections::HashMap<(String, String), sextant_db::introspection::TableMeta>,
+    >,
     last_result: Option<sextant_core::QueryResult>,
     last_error: Option<String>,
     last_query_duration: Option<Duration>,
@@ -120,6 +126,7 @@ impl App {
             pending_leader: false,
             pending_g: false,
             saved_buffers: std::collections::HashMap::new(),
+            table_meta: std::collections::HashMap::new(),
             last_result: None,
             last_error: None,
             last_query_duration: None,
@@ -436,10 +443,30 @@ impl App {
             match mgr.connect(&name, &config, password.as_deref()).await {
                 Ok(executor) => match executor.introspect_schemas_and_tables(config.driver).await {
                     Ok(schemas) => {
+                        let mut metadata = std::collections::HashMap::new();
+                        for schema in &schemas {
+                            match executor
+                                .introspect_columns(config.driver, &schema.name)
+                                .await
+                            {
+                                Ok(tables) => {
+                                    for (table, meta) in tables {
+                                        metadata.insert((schema.name.clone(), table), meta);
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "failed to introspect columns for {}: {e}",
+                                        schema.name
+                                    );
+                                }
+                            }
+                        }
                         let _ = tx.send(AppMsg::Connected {
                             name,
                             executor,
                             schemas,
+                            metadata,
                         });
                     }
                     Err(e) => {
@@ -465,6 +492,7 @@ impl App {
                 name,
                 executor,
                 schemas,
+                metadata,
             } => {
                 let schema_items = schemas
                     .into_iter()
@@ -479,6 +507,7 @@ impl App {
                     self.tree.set_connected(idx, schema_items);
                 }
                 self.executors.insert(name.clone(), executor);
+                self.table_meta.insert(name.clone(), metadata);
                 self.connection_name = Some(name);
             }
             AppMsg::ConnectionFailed { name, error } => {

@@ -1,5 +1,7 @@
 //! Database introspection: schemas and tables.
 
+use std::collections::BTreeMap;
+
 use sextant_core::{Driver, SextantError};
 use sqlx::Row;
 
@@ -10,6 +12,26 @@ use crate::executor::{DbPool, SqlxExecutor};
 pub struct Schema {
     pub name: String,
     pub tables: Vec<String>,
+}
+
+/// Metadata for a single column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnMeta {
+    pub name: String,
+    pub type_name: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub is_primary_key: bool,
+}
+
+/// Column-level metadata for a table, including its primary key.
+///
+/// `primary_key` lists the PK column names in key order; it is empty when the
+/// table has no primary key (which makes the table read-only for grid editing).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TableMeta {
+    pub columns: Vec<ColumnMeta>,
+    pub primary_key: Vec<String>,
 }
 
 impl SqlxExecutor {
@@ -162,6 +184,237 @@ impl SqlxExecutor {
 
         Ok(schemas)
     }
+
+    /// List column metadata (with primary keys) for every table in `schema`.
+    ///
+    /// Returns `(table_name, TableMeta)` pairs ordered by table name. Used to
+    /// feed the schema viewer, autocomplete and grid-editing (PK detection).
+    pub async fn introspect_columns(
+        &self,
+        driver: Driver,
+        schema: &str,
+    ) -> Result<Vec<(String, TableMeta)>, SextantError> {
+        match driver {
+            Driver::Postgres => self.columns_postgres(schema).await,
+            Driver::Mysql => self.columns_mysql(schema).await,
+            Driver::Sqlite => self.columns_sqlite(schema).await,
+        }
+    }
+
+    async fn columns_postgres(
+        &self,
+        schema: &str,
+    ) -> Result<Vec<(String, TableMeta)>, SextantError> {
+        let DbPool::Postgres(pool) = self.pool() else {
+            return Err(SextantError::Database("expected postgres pool".to_string()));
+        };
+
+        let col_rows = sqlx::query::<sqlx::Postgres>(
+            "SELECT table_name, column_name, data_type, is_nullable, column_default \
+             FROM information_schema.columns \
+             WHERE table_schema = $1 \
+             ORDER BY table_name, ordinal_position",
+        )
+        .bind(schema)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SextantError::Database(format!("failed to list columns: {e}")))?;
+
+        let pk_rows = sqlx::query::<sqlx::Postgres>(
+            "SELECT kcu.table_name, kcu.column_name \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu \
+               ON tc.constraint_name = kcu.constraint_name \
+              AND tc.table_schema = kcu.table_schema \
+             WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = $1 \
+             ORDER BY kcu.table_name, kcu.ordinal_position",
+        )
+        .bind(schema)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SextantError::Database(format!("failed to list primary keys: {e}")))?;
+
+        let mut pk_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for row in &pk_rows {
+            let table: String = row
+                .try_get("table_name")
+                .map_err(|e| SextantError::Database(format!("failed to read pk table: {e}")))?;
+            let column: String = row
+                .try_get("column_name")
+                .map_err(|e| SextantError::Database(format!("failed to read pk column: {e}")))?;
+            pk_map.entry(table).or_default().push(column);
+        }
+
+        let mut cols_map: BTreeMap<String, Vec<ColumnMeta>> = BTreeMap::new();
+        for row in &col_rows {
+            let table: String = row
+                .try_get("table_name")
+                .map_err(|e| SextantError::Database(format!("failed to read table: {e}")))?;
+            let is_nullable: String = row
+                .try_get("is_nullable")
+                .map_err(|e| SextantError::Database(format!("failed to read is_nullable: {e}")))?;
+            cols_map.entry(table).or_default().push(ColumnMeta {
+                name: row
+                    .try_get("column_name")
+                    .map_err(|e| SextantError::Database(format!("failed to read column: {e}")))?,
+                type_name: row.try_get("data_type").map_err(|e| {
+                    SextantError::Database(format!("failed to read data_type: {e}"))
+                })?,
+                nullable: is_nullable.eq_ignore_ascii_case("YES"),
+                default: row
+                    .try_get::<Option<String>, _>("column_default")
+                    .ok()
+                    .flatten(),
+                is_primary_key: false,
+            });
+        }
+
+        Ok(merge_columns(cols_map, pk_map))
+    }
+
+    async fn columns_mysql(&self, schema: &str) -> Result<Vec<(String, TableMeta)>, SextantError> {
+        let DbPool::MySql(pool) = self.pool() else {
+            return Err(SextantError::Database("expected mysql pool".to_string()));
+        };
+
+        let rows = sqlx::query::<sqlx::MySql>(
+            "SELECT table_name AS `table_name`, column_name AS `column_name`, \
+                    data_type AS `data_type`, is_nullable AS `is_nullable`, \
+                    column_default AS `column_default`, column_key AS `column_key` \
+             FROM information_schema.columns \
+             WHERE table_schema = ? \
+             ORDER BY table_name, ordinal_position",
+        )
+        .bind(schema)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SextantError::Database(format!("failed to list columns: {e}")))?;
+
+        let mut cols_map: BTreeMap<String, Vec<ColumnMeta>> = BTreeMap::new();
+        let mut pk_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for row in &rows {
+            let table: String = row
+                .try_get("table_name")
+                .map_err(|e| SextantError::Database(format!("failed to read table: {e}")))?;
+            let name: String = row
+                .try_get("column_name")
+                .map_err(|e| SextantError::Database(format!("failed to read column: {e}")))?;
+            let is_nullable: String = row
+                .try_get("is_nullable")
+                .map_err(|e| SextantError::Database(format!("failed to read is_nullable: {e}")))?;
+            let column_key: String = row
+                .try_get::<Option<String>, _>("column_key")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if column_key == "PRI" {
+                pk_map.entry(table.clone()).or_default().push(name.clone());
+            }
+            cols_map.entry(table).or_default().push(ColumnMeta {
+                name,
+                type_name: row.try_get("data_type").map_err(|e| {
+                    SextantError::Database(format!("failed to read data_type: {e}"))
+                })?,
+                nullable: is_nullable.eq_ignore_ascii_case("YES"),
+                default: row
+                    .try_get::<Option<String>, _>("column_default")
+                    .ok()
+                    .flatten(),
+                is_primary_key: false,
+            });
+        }
+
+        Ok(merge_columns(cols_map, pk_map))
+    }
+
+    async fn columns_sqlite(&self, schema: &str) -> Result<Vec<(String, TableMeta)>, SextantError> {
+        let DbPool::Sqlite(pool) = self.pool() else {
+            return Err(SextantError::Database("expected sqlite pool".to_string()));
+        };
+
+        let table_sql =
+            format!("SELECT name FROM \"{schema}\".sqlite_master WHERE type='table' ORDER BY name");
+        let table_rows = sqlx::query::<sqlx::Sqlite>(sqlx::AssertSqlSafe(table_sql))
+            .fetch_all(pool)
+            .await
+            .map_err(|e| SextantError::Database(format!("failed to list tables: {e}")))?;
+
+        let mut out = Vec::with_capacity(table_rows.len());
+        for trow in &table_rows {
+            let table: String = trow
+                .try_get("name")
+                .map_err(|e| SextantError::Database(format!("failed to read table name: {e}")))?;
+
+            let pragma = format!("PRAGMA \"{schema}\".table_info(\"{table}\")");
+            let col_rows = sqlx::query::<sqlx::Sqlite>(sqlx::AssertSqlSafe(pragma))
+                .fetch_all(pool)
+                .await
+                .map_err(|e| SextantError::Database(format!("failed to read table_info: {e}")))?;
+
+            let mut columns = Vec::with_capacity(col_rows.len());
+            let mut pk: Vec<(i64, String)> = Vec::new();
+            for row in &col_rows {
+                let name: String = row
+                    .try_get("name")
+                    .map_err(|e| SextantError::Database(format!("failed to read column: {e}")))?;
+                let notnull: i64 = row.try_get("notnull").unwrap_or(0);
+                let pk_idx: i64 = row.try_get("pk").unwrap_or(0);
+                if pk_idx > 0 {
+                    pk.push((pk_idx, name.clone()));
+                }
+                columns.push(ColumnMeta {
+                    name,
+                    type_name: row
+                        .try_get::<Option<String>, _>("type")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default(),
+                    nullable: notnull == 0,
+                    default: row
+                        .try_get::<Option<String>, _>("dflt_value")
+                        .ok()
+                        .flatten(),
+                    is_primary_key: pk_idx > 0,
+                });
+            }
+            pk.sort_by_key(|(idx, _)| *idx);
+            let primary_key = pk.into_iter().map(|(_, n)| n).collect();
+            out.push((
+                table,
+                TableMeta {
+                    columns,
+                    primary_key,
+                },
+            ));
+        }
+
+        Ok(out)
+    }
+}
+
+/// Merge a per-table column map with a per-table primary-key map, marking PK
+/// columns and attaching the ordered PK list. Used by the PG/MySQL paths where
+/// columns and primary keys are gathered separately.
+fn merge_columns(
+    cols_map: BTreeMap<String, Vec<ColumnMeta>>,
+    mut pk_map: BTreeMap<String, Vec<String>>,
+) -> Vec<(String, TableMeta)> {
+    cols_map
+        .into_iter()
+        .map(|(table, mut columns)| {
+            let primary_key = pk_map.remove(&table).unwrap_or_default();
+            for c in &mut columns {
+                c.is_primary_key = primary_key.contains(&c.name);
+            }
+            (
+                table,
+                TableMeta {
+                    columns,
+                    primary_key,
+                },
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -232,5 +485,76 @@ mod tests {
         // Will fail because sqlite doesn't have the expected MySQL pool,
         // but we verify the code path compiles and runs.
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn sqlite_introspect_columns() {
+        let exec = sqlite_executor().await;
+        exec.execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT DEFAULT 'x')",
+        )
+        .await
+        .unwrap();
+
+        let tables = exec
+            .introspect_columns(Driver::Sqlite, "main")
+            .await
+            .unwrap();
+        assert_eq!(tables.len(), 1);
+
+        let (table, meta) = &tables[0];
+        assert_eq!(table, "users");
+        assert_eq!(meta.primary_key, vec!["id"]);
+        assert_eq!(meta.columns.len(), 3);
+
+        assert_eq!(meta.columns[0].name, "id");
+        assert!(meta.columns[0].is_primary_key);
+
+        assert_eq!(meta.columns[1].name, "name");
+        assert!(!meta.columns[1].nullable);
+        assert!(!meta.columns[1].is_primary_key);
+
+        assert_eq!(meta.columns[2].name, "email");
+        assert!(meta.columns[2].nullable);
+        assert_eq!(meta.columns[2].default.as_deref(), Some("'x'"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_introspect_composite_pk_ordered() {
+        let exec = sqlite_executor().await;
+        exec.execute(
+            "CREATE TABLE membership (a INTEGER, b INTEGER, val TEXT, PRIMARY KEY (a, b))",
+        )
+        .await
+        .unwrap();
+
+        let tables = exec
+            .introspect_columns(Driver::Sqlite, "main")
+            .await
+            .unwrap();
+        let (_, meta) = &tables[0];
+        assert_eq!(meta.primary_key, vec!["a", "b"]);
+        assert!(
+            !meta
+                .columns
+                .iter()
+                .find(|c| c.name == "val")
+                .unwrap()
+                .is_primary_key
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_introspect_columns_no_pk() {
+        let exec = sqlite_executor().await;
+        exec.execute("CREATE TABLE logs (msg TEXT)").await.unwrap();
+
+        let tables = exec
+            .introspect_columns(Driver::Sqlite, "main")
+            .await
+            .unwrap();
+        let (_, meta) = &tables[0];
+        assert!(meta.primary_key.is_empty());
+        assert!(meta.columns.iter().all(|c| !c.is_primary_key));
     }
 }
