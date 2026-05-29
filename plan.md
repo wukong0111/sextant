@@ -12,7 +12,7 @@
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
 | Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `4a2636e` (fix SQLite BOOLEAN) |
-| Fase 2 — v0.2 | 🔄 En progreso | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup), `76858c7` (chore: normalización fmt/clippy toolchain 1.96), `2de33b5` (base: introspección de columnas + PK + cache), `c826b0c` (base: quote_ident + DDL `CREATE TABLE`), `b8bc78f` (2.4 columnas en árbol + browse rows + DDL), `95b4427` (2.3 autocomplete) |
+| Fase 2 — v0.2 | 🔄 En progreso | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup), `76858c7` (chore: normalización fmt/clippy toolchain 1.96), `2de33b5` (base: introspección de columnas + PK + cache), `c826b0c` (base: quote_ident + DDL `CREATE TABLE`), `b8bc78f` (2.4 columnas en árbol + browse rows + DDL), `95b4427` (2.3 autocomplete), `aa662b0` (2.2 base: transacciones + DML gen), `4d7bfac` (2.2 grid editable CRUD) |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
 ## Principios Directores
@@ -167,23 +167,14 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 
 > **Orden de prioridad (revisado).** La Fase 2 se reordenó por ratio **valor/coste**: primero lo que aporta más valor funcional con menos riesgo. El syntax highlighting **salió de la fase** (movido a post-v1, Fase 4) porque es lo más caro (obliga a un editor propio) y lo de menor valor (su utilidad es *leer*, no escribir). El autocomplete se mantiene porque su metadata ya está resuelta por la introspección existente de `sextant-db`.
 
-### 2.2 Grid Editable (CRUD)
+### 2.2 Grid Editable (CRUD) ✅ (`aa662b0`, `4d7bfac`)
 
-- Introspección de PK por tabla: consultar `information_schema` / `pragma table_info`.
-- Si tabla tiene PK: grid editable. Sin PK: read-only con `🔒` en status line.
-- **Inline editing**:
-  - `Enter` en celda → modo Insert (celda resaltada).
-  - Escribir valor, `Enter` o `Esc` para confirmar a "pending changes".
-  - Celda modificada se marca visualmente (color diferente o `*`).
-- **Operaciones**:
-  - `o` — insertar fila vacía al final.
-  - `dd` — marcar fila para eliminar (rojo/strikethrough).
-  - `Ctrl+S` — commit (abre confirmación: ver cambios, confirmar/cancelar).
-  - `Ctrl+Z` — descartar todos los pending changes.
-- **Commit**:
-  - Generar `UPDATE`, `INSERT`, `DELETE` con WHERE por PK.
-  - Ejecutar en transacción (BEGIN → statements → COMMIT).
-  - Optimistic concurrency: si la fila fue modificada por otro, mostrar error.
+- [x] ✅ Introspección de PK por tabla (reusa `introspect_columns` de la base; `pk_columns` en `EditContext`).
+- [x] ✅ Con PK: grid editable. Sin PK / resultado ad-hoc del editor: read-only con `🔒` en status line.
+- [x] ✅ **Inline editing**: `Enter` en celda → modo edición; teclear, `Enter` confirma a pending, `Esc` cancela; celda modificada marcada (color), filas nuevas en verde, borradas tachadas en rojo.
+- [x] ✅ **Operaciones**: `o` fila vacía al final, `dd` marcar borrado (toggle), `Ctrl+S` commit (modal de confirmación con los statements), `Ctrl+Z` descartar.
+- [x] ✅ **Commit**: `build_update`/`build_insert`/`build_delete` con WHERE por PK (valores originales), ejecutado en transacción (`execute_transaction`); refresco re-ejecutando el browse.
+- [ ] ⬜ Optimistic concurrency (chequeo de valores originales en WHERE) — **diferido a Fase 3** por decisión de alcance (v0.2 usa WHERE solo por PK).
 
 ### 2.3 Autocomplete (básico) ✅ (`95b4427`)
 
