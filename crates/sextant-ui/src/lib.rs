@@ -10,10 +10,10 @@ use ratatui::crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use sextant_core::QueryExecutor;
 use tokio::sync::mpsc::UnboundedSender;
@@ -51,6 +51,8 @@ pub enum AppMsg {
     QueryResult(sextant_core::QueryResult),
     /// Query or connection error.
     QueryError(String),
+    /// Result of committing pending grid edits (rows affected, or error).
+    CommitResult(Result<u64, String>),
     /// Toggle the SQL editor modal.
     ToggleEditor,
     /// A key event targeted at the editor.
@@ -92,6 +94,12 @@ pub struct App {
     editor: EditorModal,
     pending_leader: bool,
     pending_g: bool,
+    /// Pending `d` of a `dd` (delete-row) chord in the grid.
+    pending_d: bool,
+    /// Pending grid-commit statements awaiting confirmation.
+    pending_commit: Option<Vec<String>>,
+    /// SQL used for the current browse, replayed to refresh after a commit.
+    last_browse_sql: Option<String>,
     saved_buffers: std::collections::HashMap<String, String>,
     /// Column/PK metadata per connection, keyed by `(schema, table)`.
     table_meta: std::collections::HashMap<
@@ -127,6 +135,9 @@ impl App {
             editor: EditorModal::new(),
             pending_leader: false,
             pending_g: false,
+            pending_d: false,
+            pending_commit: None,
+            last_browse_sql: None,
             saved_buffers: std::collections::HashMap::new(),
             table_meta: std::collections::HashMap::new(),
             last_result: None,
@@ -167,6 +178,11 @@ impl App {
             self.editor.render(frame, area);
         }
 
+        // Commit-confirmation modal (floating overlay).
+        if let Some(statements) = &self.pending_commit {
+            render_commit_modal(frame, area, statements);
+        }
+
         // Status line at the bottom.
         let mode_span = Span::styled(
             format!(" {} ", self.mode),
@@ -201,19 +217,37 @@ impl App {
             Span::raw(" ")
         };
 
+        // Editability / pending-changes indicator.
+        let edit_span = if self.result_grid.result().is_some() {
+            if !self.result_grid.is_editable() {
+                Span::styled("🔒 │ ", Style::default().fg(Color::DarkGray))
+            } else if self.result_grid.has_pending() {
+                Span::styled(
+                    format!("✎ {} pending │ ", self.result_grid.pending_count()),
+                    Style::default().fg(Color::Yellow),
+                )
+            } else {
+                Span::raw("")
+            }
+        } else {
+            Span::raw("")
+        };
+
         let hint = if self.editor_open {
             if self.mode == Mode::Normal {
                 " <i> insert │ <C-e> run │ <Esc> close "
             } else {
                 " <Esc> normal "
             }
+        } else if self.focus == Focus::Grid && self.result_grid.is_editable() {
+            " <Enter> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
         } else {
             " <Space>e editor │ <C-q> quit "
         };
         let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
         let status = Line::from(vec![
-            mode_span, conn_span, error_span, stats_span, hint_span,
+            mode_span, conn_span, error_span, stats_span, edit_span, hint_span,
         ]);
         let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
         frame.render_widget(status_bar, outer[1]);
@@ -238,6 +272,28 @@ impl App {
             }
             return;
         }
+
+        // Commit-confirmation modal swallows keys until dismissed.
+        if self.pending_commit.is_some() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') => self.confirm_commit(tx),
+                KeyCode::Esc | KeyCode::Char('n') => self.pending_commit = None,
+                _ => {}
+            }
+            return;
+        }
+
+        // Inline cell editing in the grid swallows keys until it ends.
+        if self.focus == Focus::Grid && self.result_grid.is_editing() {
+            if !self.result_grid.handle_edit_key(key) {
+                self.mode = Mode::Normal;
+            }
+            return;
+        }
+
+        // `dd` chord state for row deletion (reset unless this key is `d`).
+        let d_pending = self.pending_d;
+        self.pending_d = false;
 
         match key.code {
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -302,9 +358,43 @@ impl App {
                 self.pending_g = false;
             }
             KeyCode::Enter => {
-                if self.focus == Focus::Tree {
-                    self.handle_enter(tx);
+                match self.focus {
+                    Focus::Tree => self.handle_enter(tx),
+                    Focus::Grid => {
+                        self.result_grid.begin_edit();
+                        if self.result_grid.is_editing() {
+                            self.mode = Mode::Insert;
+                        }
+                    }
                 }
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('o') if key.modifiers.is_empty() && self.focus == Focus::Grid => {
+                self.result_grid.add_row();
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('d') if key.modifiers.is_empty() && self.focus == Focus::Grid => {
+                if d_pending {
+                    self.result_grid.mark_delete();
+                } else {
+                    self.pending_d = true;
+                }
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('z')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && self.focus == Focus::Grid =>
+            {
+                self.result_grid.discard_changes();
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('s')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && self.focus == Focus::Grid =>
+            {
+                self.begin_commit();
                 self.pending_leader = false;
                 self.pending_g = false;
             }
@@ -509,7 +599,7 @@ impl App {
         });
     }
 
-    fn handle_msg(&mut self, msg: AppMsg) {
+    fn handle_msg(&mut self, msg: AppMsg, tx: &UnboundedSender<AppMsg>) {
         match msg {
             AppMsg::Connected {
                 name,
@@ -548,6 +638,22 @@ impl App {
             }
             AppMsg::QueryError(error) => {
                 tracing::warn!("query error: {}", error);
+                self.last_error = Some(error);
+            }
+            AppMsg::CommitResult(Ok(affected)) => {
+                tracing::info!("commit affected {affected} rows");
+                self.result_grid.discard_changes();
+                self.last_error = None;
+                // Replay the browse query so the grid reflects committed state.
+                if let (Some(name), Some(sql)) =
+                    (self.connection_name.clone(), self.last_browse_sql.clone())
+                {
+                    self.run_sql(&name, sql, tx);
+                }
+            }
+            AppMsg::CommitResult(Err(error)) => {
+                tracing::warn!("commit error: {}", error);
+                // Keep pending edits so the user can fix and retry.
                 self.last_error = Some(error);
             }
             AppMsg::Quit => {
@@ -600,6 +706,9 @@ impl App {
             tracing::warn!("run_editor_sql: no connection_name");
             return;
         };
+        // Ad-hoc editor results are not tied to a browseable table → read-only.
+        self.result_grid.set_edit_context(None);
+        self.last_browse_sql = None;
         self.run_sql(&name, sql, tx);
     }
 
@@ -688,9 +797,58 @@ impl App {
             "SELECT * FROM {} LIMIT 500",
             sextant_db::qualified_table(driver, &schema_name, &table_name)
         );
+
+        // Make the grid editable for this table (read-only if it has no PK).
+        let pk_columns = self
+            .table_meta
+            .get(&conn_name)
+            .and_then(|m| m.get(&(schema_name.clone(), table_name.clone())))
+            .map(|meta| meta.primary_key.clone())
+            .unwrap_or_default();
+        self.result_grid
+            .set_edit_context(Some(result_grid::EditContext {
+                driver,
+                schema: schema_name,
+                table: table_name,
+                pk_columns,
+            }));
+
         self.connection_name = Some(conn_name.clone());
+        self.last_browse_sql = Some(sql.clone());
         self.run_sql(&conn_name, sql, tx);
         self.focus = Focus::Grid;
+    }
+
+    /// Build the commit-confirmation modal from the grid's pending changes.
+    fn begin_commit(&mut self) {
+        if !self.result_grid.is_editable() || !self.result_grid.has_pending() {
+            return;
+        }
+        let statements = self.result_grid.build_commit_statements();
+        if !statements.is_empty() {
+            self.pending_commit = Some(statements);
+        }
+    }
+
+    /// Apply the confirmed statements in a transaction on the active connection.
+    fn confirm_commit(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(statements) = self.pending_commit.take() else {
+            return;
+        };
+        let Some(name) = self.connection_name.clone() else {
+            return;
+        };
+        let Some(executor) = self.executors.get(&name).cloned() else {
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let result = executor
+                .execute_transaction(&statements)
+                .await
+                .map_err(|e| format!("{e}"));
+            let _ = tx.send(AppMsg::CommitResult(result));
+        });
     }
 
     /// Emit a `CREATE TABLE` skeleton for the selected table into the editor.
@@ -771,7 +929,7 @@ async fn run_async() -> io::Result<()> {
                 }
             }
             Some(msg) = rx.recv() => {
-                app.handle_msg(msg);
+                app.handle_msg(msg, &tx);
                 app.needs_redraw = true;
             }
             _ = tick.tick() => {
@@ -802,6 +960,44 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Re
     stdout().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+/// Render the commit-confirmation modal listing the statements to be run.
+fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String]) {
+    let width = (area.width as f32 * 0.7) as u16;
+    let height = (statements.len() as u16 + 4).min(area.height.max(4));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+        "Commit these changes?",
+        Style::default().fg(Color::Yellow),
+    ))];
+    for s in statements {
+        lines.push(Line::from(Span::raw(format!("  {s}"))));
+    }
+    lines.push(Line::from(Span::styled(
+        "<Enter>/y confirm   <Esc>/n cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(" Confirm commit ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .style(Style::default().bg(Color::Black)),
+        ),
+        rect,
+    );
 }
 
 #[cfg(test)]
@@ -1423,5 +1619,50 @@ mod tests {
         assert!(content.contains("CREATE TABLE"), "got: {content}");
         assert!(content.contains("\"users\""), "got: {content}");
         assert!(content.contains("PRIMARY KEY (\"id\")"), "got: {content}");
+    }
+
+    #[test]
+    fn ctrl_s_opens_commit_modal_and_esc_cancels() {
+        let mut app = test_app();
+        app.focus = Focus::Grid;
+        app.result_grid.set_result(Some(sextant_core::QueryResult {
+            columns: vec![
+                sextant_core::Column {
+                    name: "id".into(),
+                    type_name: "int".into(),
+                },
+                sextant_core::Column {
+                    name: "name".into(),
+                    type_name: "text".into(),
+                },
+            ],
+            rows: vec![vec![
+                sextant_core::CellValue::I64(1),
+                sextant_core::CellValue::String("Alice".into()),
+            ]],
+            rows_affected: None,
+        }));
+        app.result_grid
+            .set_edit_context(Some(result_grid::EditContext {
+                driver: sextant_core::Driver::Sqlite,
+                schema: "main".into(),
+                table: "users".into(),
+                pk_columns: vec!["id".into()],
+            }));
+        app.result_grid.mark_delete();
+        assert!(app.result_grid.has_pending());
+
+        // Ctrl+S opens the confirmation modal with the generated statements.
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        )));
+        let pending = app.pending_commit.as_ref().expect("modal should open");
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].starts_with("DELETE FROM"));
+
+        // Esc cancels the commit.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(app.pending_commit.is_none());
     }
 }
