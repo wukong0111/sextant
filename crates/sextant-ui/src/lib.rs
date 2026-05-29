@@ -18,6 +18,8 @@ use ratatui::{
 use sextant_core::QueryExecutor;
 use tokio::sync::mpsc::UnboundedSender;
 
+mod autocomplete;
+
 mod editor_modal;
 use editor_modal::{EditorAction, EditorModal};
 
@@ -558,11 +560,25 @@ impl App {
     fn open_editor(&mut self) {
         self.editor_open = true;
         self.mode = Mode::Normal;
-        if let Some(name) = &self.connection_name {
-            if let Some(buf) = self.saved_buffers.get(name) {
-                self.editor.set_content(buf);
+        if let Some(name) = self.connection_name.clone() {
+            if let Some(buf) = self.saved_buffers.get(&name).cloned() {
+                self.editor.set_content(&buf);
+            }
+            let index = self.build_completion_index(&name);
+            self.editor.set_completion_source(index);
+        }
+    }
+
+    /// Build the autocomplete table/column index for a connection.
+    fn build_completion_index(&self, conn_name: &str) -> autocomplete::SchemaIndex {
+        let mut index = autocomplete::SchemaIndex::new();
+        if let Some(tables) = self.table_meta.get(conn_name) {
+            for ((_schema, table), meta) in tables {
+                let columns = meta.columns.iter().map(|c| c.name.clone()).collect();
+                index.add_table(table.clone(), columns);
             }
         }
+        index
     }
 
     fn close_editor(&mut self) {
