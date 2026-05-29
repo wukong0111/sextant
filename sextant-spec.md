@@ -258,6 +258,7 @@ Like Helix: **select first, then act**. `w` selects the next word; `d` deletes t
 | `<C-Space>` | Trigger autocomplete |
 | `<Esc>` (from Normal) | Dismiss editor modal (state preserved) |
 | `<Tab>` / `<S-Tab>` | Cycle buffers within the modal |
+| `<C-t>` | Open a new (empty) buffer |
 
 ### Result Grid
 

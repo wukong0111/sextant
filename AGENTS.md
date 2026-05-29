@@ -19,6 +19,7 @@ Agent-facing reference for the `sextant` project. Read this first before making 
 | `ARCHITECTURE.md` | Code map: data flow, where each concern lives, non-obvious invariants/gotchas, and "how to add X" recipes. Read before touching code. |
 | `sextant-spec.md` | Full product specification (features, UI layout, keybindings, architecture). |
 | `plan.md` | Development roadmap split into phases (Fase 0–3). Check this before starting work. |
+| `MANUAL-QA.md` | Hands-on QA runbook: how to exercise each feature inside the TUI (setup, walkthrough, keybindings). Use to validate UI work that automated tests can't cover. |
 
 > **Note:** `CLAUDE.md` is a symlink to this file (`AGENTS.md`) — editing either edits both.
 > Project-specific workflows are available as slash-command skills in `.claude/skills/`

@@ -32,21 +32,21 @@ impl ConnectionManager {
         let url = build_connection_url(conn, password)?;
         let pool = match conn.driver {
             Driver::Postgres => {
-                let pool = sqlx::PgPool::connect(&url)
-                    .await
-                    .map_err(|e| SextantError::Database(format!("failed to connect to {name}: {e}")))?;
+                let pool = sqlx::PgPool::connect(&url).await.map_err(|e| {
+                    SextantError::Database(format!("failed to connect to {name}: {e}"))
+                })?;
                 DbPool::Postgres(pool)
             }
             Driver::Sqlite => {
-                let pool = sqlx::SqlitePool::connect(&url)
-                    .await
-                    .map_err(|e| SextantError::Database(format!("failed to connect to {name}: {e}")))?;
+                let pool = sqlx::SqlitePool::connect(&url).await.map_err(|e| {
+                    SextantError::Database(format!("failed to connect to {name}: {e}"))
+                })?;
                 DbPool::Sqlite(pool)
             }
             Driver::Mysql => {
-                let pool = sqlx::MySqlPool::connect(&url)
-                    .await
-                    .map_err(|e| SextantError::Database(format!("failed to connect to {name}: {e}")))?;
+                let pool = sqlx::MySqlPool::connect(&url).await.map_err(|e| {
+                    SextantError::Database(format!("failed to connect to {name}: {e}"))
+                })?;
                 DbPool::MySql(pool)
             }
         };
@@ -117,12 +117,14 @@ mod tests {
         let exec_b = mgr.connect("b", &conn, None).await.unwrap();
 
         // Create a table in connection A.
-        exec_a.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        exec_a
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
             .await
             .unwrap();
 
         // Connection B should not see the table (separate in-memory DBs).
-        let result = exec_b.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        let result = exec_b
+            .execute("SELECT name FROM sqlite_master WHERE type='table'")
             .await
             .unwrap();
         assert!(result.rows.is_empty());

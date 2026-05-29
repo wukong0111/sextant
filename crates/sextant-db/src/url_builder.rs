@@ -18,15 +18,17 @@ pub fn build_connection_url(
 }
 
 fn build_postgres_url(conn: &Connection, password: Option<&str>) -> Result<String, SextantError> {
-    let host = conn.host.as_ref().ok_or_else(|| {
-        SextantError::Config(format!("connection '{}' missing host", conn.name))
-    })?;
-    let port = conn.port.ok_or_else(|| {
-        SextantError::Config(format!("connection '{}' missing port", conn.name))
-    })?;
-    let user = conn.user.as_ref().ok_or_else(|| {
-        SextantError::Config(format!("connection '{}' missing user", conn.name))
-    })?;
+    let host = conn
+        .host
+        .as_ref()
+        .ok_or_else(|| SextantError::Config(format!("connection '{}' missing host", conn.name)))?;
+    let port = conn
+        .port
+        .ok_or_else(|| SextantError::Config(format!("connection '{}' missing port", conn.name)))?;
+    let user = conn
+        .user
+        .as_ref()
+        .ok_or_else(|| SextantError::Config(format!("connection '{}' missing user", conn.name)))?;
     let database = conn.database.as_ref().ok_or_else(|| {
         SextantError::Config(format!("connection '{}' missing database", conn.name))
     })?;
@@ -36,7 +38,7 @@ fn build_postgres_url(conn: &Connection, password: Option<&str>) -> Result<Strin
         url.push(':');
         url.push_str(pass);
     }
-    url.push_str("@");
+    url.push('@');
     url.push_str(host);
     url.push(':');
     url.push_str(&port.to_string());
@@ -52,15 +54,17 @@ fn build_postgres_url(conn: &Connection, password: Option<&str>) -> Result<Strin
 }
 
 fn build_mysql_url(conn: &Connection, password: Option<&str>) -> Result<String, SextantError> {
-    let host = conn.host.as_ref().ok_or_else(|| {
-        SextantError::Config(format!("connection '{}' missing host", conn.name))
-    })?;
-    let port = conn.port.ok_or_else(|| {
-        SextantError::Config(format!("connection '{}' missing port", conn.name))
-    })?;
-    let user = conn.user.as_ref().ok_or_else(|| {
-        SextantError::Config(format!("connection '{}' missing user", conn.name))
-    })?;
+    let host = conn
+        .host
+        .as_ref()
+        .ok_or_else(|| SextantError::Config(format!("connection '{}' missing host", conn.name)))?;
+    let port = conn
+        .port
+        .ok_or_else(|| SextantError::Config(format!("connection '{}' missing port", conn.name)))?;
+    let user = conn
+        .user
+        .as_ref()
+        .ok_or_else(|| SextantError::Config(format!("connection '{}' missing user", conn.name)))?;
     let database = conn.database.as_ref().ok_or_else(|| {
         SextantError::Config(format!("connection '{}' missing database", conn.name))
     })?;
@@ -81,19 +85,19 @@ fn build_mysql_url(conn: &Connection, password: Option<&str>) -> Result<String, 
 }
 
 fn build_sqlite_url(conn: &Connection) -> Result<String, SextantError> {
-    let path = conn.path.as_ref().ok_or_else(|| {
-        SextantError::Config(format!("connection '{}' missing path", conn.name))
-    })?;
+    let path = conn
+        .path
+        .as_ref()
+        .ok_or_else(|| SextantError::Config(format!("connection '{}' missing path", conn.name)))?;
 
     if path == ":memory:" {
         return Ok("sqlite::memory:".to_string());
     }
 
-    let expanded = if path.starts_with("~/") {
-        let home = dirs::home_dir().ok_or_else(|| {
-            SextantError::Config("could not resolve home directory".to_string())
-        })?;
-        home.join(&path[2..])
+    let expanded = if let Some(rest) = path.strip_prefix("~/") {
+        let home = dirs::home_dir()
+            .ok_or_else(|| SextantError::Config("could not resolve home directory".to_string()))?;
+        home.join(rest)
     } else {
         std::path::PathBuf::from(path)
     };
@@ -145,7 +149,10 @@ mod tests {
     #[test]
     fn postgres_url_with_password() {
         let url = build_connection_url(&pg_conn(), Some("secret")).unwrap();
-        assert_eq!(url, "postgres://dan:secret@127.0.0.1:5432/scratch?sslmode=prefer");
+        assert_eq!(
+            url,
+            "postgres://dan:secret@127.0.0.1:5432/scratch?sslmode=prefer"
+        );
     }
 
     #[test]

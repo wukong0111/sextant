@@ -1,7 +1,7 @@
 //! TOML parsing for `connections.toml`.
 
-use sextant_core::{Connection, Driver, SextantError};
 use serde::Deserialize;
+use sextant_core::{Connection, Driver, SextantError};
 
 #[derive(Debug, Deserialize)]
 struct ConnectionsFile {
@@ -44,11 +44,7 @@ fn raw_to_connection(raw: RawConnection) -> Result<Connection, SextantError> {
         "postgres" => Driver::Postgres,
         "mysql" => Driver::Mysql,
         "sqlite" => Driver::Sqlite,
-        other => {
-            return Err(SextantError::Config(format!(
-                "unsupported driver: {other}"
-            )))
-        }
+        other => return Err(SextantError::Config(format!("unsupported driver: {other}"))),
     };
 
     Ok(Connection {
