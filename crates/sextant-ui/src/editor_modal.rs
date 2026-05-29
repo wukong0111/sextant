@@ -1,10 +1,10 @@
 //! Floating SQL editor modal backed by `tui-textarea`.
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     widgets::{Block, Borders, Clear},
-    Frame,
 };
 use tui_textarea::TextArea;
 
@@ -74,54 +74,38 @@ impl EditorModal {
         }
 
         match mode {
-            super::Mode::Normal => {
-                match key.code {
-                    KeyCode::Char('i') if key.modifiers.is_empty() => {
-                        return (super::Mode::Insert, EditorAction::None);
-                    }
-                    KeyCode::Char('s')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        self.mark_saved();
-                        return (super::Mode::Normal, EditorAction::Save);
-                    }
-                    KeyCode::Enter
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        return (super::Mode::Normal, EditorAction::Execute);
-                    }
-                    KeyCode::Char('e')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        return (super::Mode::Normal, EditorAction::Execute);
-                    }
-                    KeyCode::Esc => {
-                        return (super::Mode::Normal, EditorAction::Close);
-                    }
-                    _ => (super::Mode::Normal, EditorAction::None),
+            super::Mode::Normal => match key.code {
+                KeyCode::Char('i') if key.modifiers.is_empty() => {
+                    (super::Mode::Insert, EditorAction::None)
                 }
-            }
+                KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.mark_saved();
+                    (super::Mode::Normal, EditorAction::Save)
+                }
+                KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    (super::Mode::Normal, EditorAction::Execute)
+                }
+                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    (super::Mode::Normal, EditorAction::Execute)
+                }
+                KeyCode::Esc => (super::Mode::Normal, EditorAction::Close),
+                _ => (super::Mode::Normal, EditorAction::None),
+            },
             super::Mode::Insert => {
                 if key.code == KeyCode::Esc && key.modifiers.is_empty() {
                     return (super::Mode::Normal, EditorAction::None);
                 }
 
-                if key.code == KeyCode::Char('s')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
+                if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     self.mark_saved();
                     return (super::Mode::Insert, EditorAction::Save);
                 }
 
-                if key.code == KeyCode::Enter
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
+                if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return (super::Mode::Insert, EditorAction::Execute);
                 }
 
-                if key.code == KeyCode::Char('e')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
+                if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return (super::Mode::Insert, EditorAction::Execute);
                 }
 
@@ -141,8 +125,7 @@ impl EditorModal {
 
     /// Replace the buffer content.
     pub fn set_content(&mut self, text: &str) {
-        let lines: Vec<String> =
-            text.lines().map(|s| s.to_string()).collect();
+        let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
         self.textarea = TextArea::new(lines);
         // Re-apply styling because `TextArea::new` creates a fresh widget.
         self.textarea.set_block(
@@ -151,12 +134,10 @@ impl EditorModal {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         );
-        self.textarea.set_style(
-            Style::default().fg(Color::White).bg(Color::Black),
-        );
-        self.textarea.set_cursor_style(
-            Style::default().fg(Color::Yellow),
-        );
+        self.textarea
+            .set_style(Style::default().fg(Color::White).bg(Color::Black));
+        self.textarea
+            .set_cursor_style(Style::default().fg(Color::Yellow));
         self.dirty = false;
     }
 
@@ -216,8 +197,7 @@ mod tests {
     #[test]
     fn normal_mode_i_switches_to_insert() {
         let mut editor = EditorModal::new();
-        let (mode, action) =
-            editor.handle_key(key_char('i'), super::super::Mode::Normal);
+        let (mode, action) = editor.handle_key(key_char('i'), super::super::Mode::Normal);
         assert_eq!(mode, super::super::Mode::Insert);
         assert_eq!(action, EditorAction::None);
     }
@@ -225,10 +205,8 @@ mod tests {
     #[test]
     fn normal_mode_esc_closes() {
         let mut editor = EditorModal::new();
-        let (mode, action) = editor.handle_key(
-            KeyEvent::from(KeyCode::Esc),
-            super::super::Mode::Normal,
-        );
+        let (mode, action) =
+            editor.handle_key(KeyEvent::from(KeyCode::Esc), super::super::Mode::Normal);
         assert_eq!(mode, super::super::Mode::Normal);
         assert_eq!(action, EditorAction::Close);
     }
@@ -236,8 +214,7 @@ mod tests {
     #[test]
     fn normal_mode_ctrl_s_saves() {
         let mut editor = EditorModal::new();
-        let (mode, action) =
-            editor.handle_key(key_ctrl('s'), super::super::Mode::Normal);
+        let (mode, action) = editor.handle_key(key_ctrl('s'), super::super::Mode::Normal);
         assert_eq!(mode, super::super::Mode::Normal);
         assert_eq!(action, EditorAction::Save);
     }
@@ -245,10 +222,8 @@ mod tests {
     #[test]
     fn insert_mode_esc_returns_to_normal() {
         let mut editor = EditorModal::new();
-        let (mode, action) = editor.handle_key(
-            KeyEvent::from(KeyCode::Esc),
-            super::super::Mode::Insert,
-        );
+        let (mode, action) =
+            editor.handle_key(KeyEvent::from(KeyCode::Esc), super::super::Mode::Insert);
         assert_eq!(mode, super::super::Mode::Normal);
         assert_eq!(action, EditorAction::None);
     }

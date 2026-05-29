@@ -30,9 +30,7 @@ impl SqlxExecutor {
 
     async fn introspect_postgres(&self) -> Result<Vec<Schema>, SextantError> {
         let DbPool::Postgres(pool) = self.pool() else {
-            return Err(SextantError::Database(
-                "expected postgres pool".to_string(),
-            ));
+            return Err(SextantError::Database("expected postgres pool".to_string()));
         };
 
         let schema_rows = sqlx::query::<sqlx::Postgres>(
@@ -46,9 +44,9 @@ impl SqlxExecutor {
 
         let mut schemas = Vec::with_capacity(schema_rows.len());
         for row in schema_rows {
-            let name: String = row.try_get("schema_name").map_err(|e| {
-                SextantError::Database(format!("failed to read schema_name: {e}"))
-            })?;
+            let name: String = row
+                .try_get("schema_name")
+                .map_err(|e| SextantError::Database(format!("failed to read schema_name: {e}")))?;
 
             let table_rows = sqlx::query::<sqlx::Postgres>(
                 "SELECT table_name FROM information_schema.tables \
@@ -63,8 +61,9 @@ impl SqlxExecutor {
             let tables = table_rows
                 .into_iter()
                 .map(|r| {
-                    r.try_get::<String, _>("table_name")
-                        .map_err(|e| SextantError::Database(format!("failed to read table_name: {e}")))
+                    r.try_get::<String, _>("table_name").map_err(|e| {
+                        SextantError::Database(format!("failed to read table_name: {e}"))
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -76,9 +75,7 @@ impl SqlxExecutor {
 
     async fn introspect_mysql(&self) -> Result<Vec<Schema>, SextantError> {
         let DbPool::MySql(pool) = self.pool() else {
-            return Err(SextantError::Database(
-                "expected mysql pool".to_string(),
-            ));
+            return Err(SextantError::Database("expected mysql pool".to_string()));
         };
 
         let schema_rows = sqlx::query::<sqlx::MySql>(
@@ -92,9 +89,9 @@ impl SqlxExecutor {
 
         let mut schemas = Vec::with_capacity(schema_rows.len());
         for row in schema_rows {
-            let name: String = row.try_get("schema_name").map_err(|e| {
-                SextantError::Database(format!("failed to read schema_name: {e}"))
-            })?;
+            let name: String = row
+                .try_get("schema_name")
+                .map_err(|e| SextantError::Database(format!("failed to read schema_name: {e}")))?;
 
             let table_rows = sqlx::query::<sqlx::MySql>(
                 "SELECT table_name AS `table_name` FROM information_schema.tables \
@@ -109,8 +106,9 @@ impl SqlxExecutor {
             let tables = table_rows
                 .into_iter()
                 .map(|r| {
-                    r.try_get::<String, _>("table_name")
-                        .map_err(|e| SextantError::Database(format!("failed to read table_name: {e}")))
+                    r.try_get::<String, _>("table_name").map_err(|e| {
+                        SextantError::Database(format!("failed to read table_name: {e}"))
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -122,9 +120,7 @@ impl SqlxExecutor {
 
     async fn introspect_sqlite(&self) -> Result<Vec<Schema>, SextantError> {
         let DbPool::Sqlite(pool) = self.pool() else {
-            return Err(SextantError::Database(
-                "expected sqlite pool".to_string(),
-            ));
+            return Err(SextantError::Database("expected sqlite pool".to_string()));
         };
 
         let db_rows = sqlx::query::<sqlx::Sqlite>("PRAGMA database_list")
@@ -155,8 +151,9 @@ impl SqlxExecutor {
             let tables = table_rows
                 .into_iter()
                 .map(|r| {
-                    r.try_get::<String, _>("name")
-                        .map_err(|e| SextantError::Database(format!("failed to read table name: {e}")))
+                    r.try_get::<String, _>("name").map_err(|e| {
+                        SextantError::Database(format!("failed to read table name: {e}"))
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -192,7 +189,8 @@ mod tests {
             .await
             .unwrap();
 
-        let schemas = exec.introspect_schemas_and_tables(Driver::Sqlite)
+        let schemas = exec
+            .introspect_schemas_and_tables(Driver::Sqlite)
             .await
             .unwrap();
 
@@ -205,7 +203,8 @@ mod tests {
     async fn sqlite_empty_database() {
         let exec = sqlite_executor().await;
 
-        let schemas = exec.introspect_schemas_and_tables(Driver::Sqlite)
+        let schemas = exec
+            .introspect_schemas_and_tables(Driver::Sqlite)
             .await
             .unwrap();
 

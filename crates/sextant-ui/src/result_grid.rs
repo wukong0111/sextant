@@ -1,11 +1,11 @@
 //! Read-only result grid backed by `ratatui::widgets::Table`.
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Rect},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Row, Table},
-    Frame,
 };
 use sextant_core::{CellValue, QueryResult};
 
@@ -96,8 +96,11 @@ impl ResultGrid {
                 "No results",
                 Style::default().fg(Color::DarkGray),
             ));
-            let para = ratatui::widgets::Paragraph::new(text)
-                .block(Block::default().borders(Borders::NONE).style(Style::default().bg(Color::Black)));
+            let para = ratatui::widgets::Paragraph::new(text).block(
+                Block::default()
+                    .borders(Borders::NONE)
+                    .style(Style::default().bg(Color::Black)),
+            );
             frame.render_widget(para, area);
             return;
         }
@@ -148,9 +151,11 @@ impl ResultGrid {
             .map(|&w| Constraint::Length(w as u16))
             .collect();
 
-        let table = Table::new(rows, constraints)
-            .header(header)
-            .block(Block::default().borders(Borders::NONE).style(Style::default().bg(Color::Black)));
+        let table = Table::new(rows, constraints).header(header).block(
+            Block::default()
+                .borders(Borders::NONE)
+                .style(Style::default().bg(Color::Black)),
+        );
 
         frame.render_widget(table, area);
     }
@@ -182,11 +187,7 @@ fn cell_value_to_string(value: &CellValue) -> String {
 /// Compute per-column display widths.
 /// Width = max(header_len, max_cell_len) clamped to [3, 40].
 fn compute_column_widths(result: &QueryResult) -> Vec<usize> {
-    let mut widths: Vec<usize> = result
-        .columns
-        .iter()
-        .map(|c| c.name.len())
-        .collect();
+    let mut widths: Vec<usize> = result.columns.iter().map(|c| c.name.len()).collect();
 
     for row in &result.rows {
         for (i, cell) in row.iter().enumerate() {
@@ -203,7 +204,7 @@ fn compute_column_widths(result: &QueryResult) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
     use sextant_core::{CellValue, Column};
 
     fn sample_result() -> QueryResult {
@@ -232,7 +233,9 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let grid = ResultGrid::new();
 
-        terminal.draw(|frame| grid.render(frame, frame.area())).unwrap();
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
 
         let buf = terminal.backend().buffer();
         let text: String = buf.content.iter().map(|c| c.symbol()).collect();
@@ -247,16 +250,24 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut grid = ResultGrid::new();
         grid.set_result(Some(QueryResult {
-            columns: vec![Column { name: "x".into(), type_name: "int".into() }],
+            columns: vec![Column {
+                name: "x".into(),
+                type_name: "int".into(),
+            }],
             rows: vec![],
             rows_affected: None,
         }));
 
-        terminal.draw(|frame| grid.render(frame, frame.area())).unwrap();
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
 
         let buf = terminal.backend().buffer();
         let text: String = buf.content.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("No results"), "expected 'No results' placeholder, got: {text}");
+        assert!(
+            text.contains("No results"),
+            "expected 'No results' placeholder, got: {text}"
+        );
     }
 
     #[test]
@@ -266,12 +277,17 @@ mod tests {
         let mut grid = ResultGrid::new();
         grid.set_result(Some(sample_result()));
 
-        terminal.draw(|frame| grid.render(frame, frame.area())).unwrap();
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
 
         let buf = terminal.backend().buffer();
         let text: String = buf.content.iter().map(|c| c.symbol()).collect();
         assert!(text.contains("id"), "header should contain 'id': {text}");
-        assert!(text.contains("name"), "header should contain 'name': {text}");
+        assert!(
+            text.contains("name"),
+            "header should contain 'name': {text}"
+        );
         assert!(text.contains("Alice"), "row should contain 'Alice': {text}");
         assert!(text.contains("Bob"), "row should contain 'Bob': {text}");
     }

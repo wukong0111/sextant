@@ -109,7 +109,10 @@ database = "scratch"
 
         let err = load_connections_from(file.path()).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("'host' is required"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("'host' is required"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
@@ -125,7 +128,10 @@ driver = "sqlite"
 
         let err = load_connections_from(file.path()).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("'path' is required"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("'path' is required"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
@@ -141,14 +147,20 @@ driver = "oracle"
 
         let err = load_connections_from(file.path()).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("unsupported driver"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("unsupported driver"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
     fn connection_password_from_env() {
         // Sequential assertions to avoid races with other env-modifying tests.
         unsafe { std::env::set_var("SEXTANT_LOCAL_PG_PASSWORD", "secret123") };
-        assert_eq!(connection_password("local-pg"), Some("secret123".to_string()));
+        assert_eq!(
+            connection_password("local-pg"),
+            Some("secret123".to_string())
+        );
         unsafe { std::env::remove_var("SEXTANT_LOCAL_PG_PASSWORD") };
         assert_eq!(connection_password("local-pg"), None);
 

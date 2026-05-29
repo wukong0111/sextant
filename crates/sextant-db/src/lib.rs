@@ -37,11 +37,14 @@ mod tests {
             .await
             .unwrap();
 
-        exec.execute("INSERT INTO users (id, name, active, score, data) VALUES (2, NULL, 0, NULL, NULL)")
-            .await
-            .unwrap();
+        exec.execute(
+            "INSERT INTO users (id, name, active, score, data) VALUES (2, NULL, 0, NULL, NULL)",
+        )
+        .await
+        .unwrap();
 
-        let result = exec.execute("SELECT id, name, active, score, data FROM users ORDER BY id")
+        let result = exec
+            .execute("SELECT id, name, active, score, data FROM users ORDER BY id")
             .await
             .unwrap();
 
@@ -76,7 +79,8 @@ mod tests {
             .await
             .unwrap();
 
-        let result = exec.execute("SELECT enabled FROM flags ORDER BY id")
+        let result = exec
+            .execute("SELECT enabled FROM flags ORDER BY id")
             .await
             .unwrap();
 
@@ -94,20 +98,20 @@ mod tests {
             .await
             .unwrap();
 
-        let insert = exec.execute("INSERT INTO t (val) VALUES ('a'), ('b'), ('c')")
+        let insert = exec
+            .execute("INSERT INTO t (val) VALUES ('a'), ('b'), ('c')")
             .await
             .unwrap();
         assert_eq!(insert.rows_affected, Some(3));
         assert!(insert.rows.is_empty());
 
-        let update = exec.execute("UPDATE t SET val = 'x' WHERE id > 1")
+        let update = exec
+            .execute("UPDATE t SET val = 'x' WHERE id > 1")
             .await
             .unwrap();
         assert_eq!(update.rows_affected, Some(2));
 
-        let delete = exec.execute("DELETE FROM t WHERE id = 1")
-            .await
-            .unwrap();
+        let delete = exec.execute("DELETE FROM t WHERE id = 1").await.unwrap();
         assert_eq!(delete.rows_affected, Some(1));
     }
 
@@ -119,16 +123,16 @@ mod tests {
             .await
             .unwrap();
 
-        let result = exec.execute("SELECT * FROM empty")
-            .await
-            .unwrap();
+        let result = exec.execute("SELECT * FROM empty").await.unwrap();
 
         assert!(result.rows.is_empty());
         assert!(result.columns.is_empty());
     }
 
     async fn cleanup_pg_schema(exec: &SqlxExecutor) {
-        let DbPool::Postgres(pool) = exec.pool() else { return };
+        let DbPool::Postgres(pool) = exec.pool() else {
+            return;
+        };
         let rows = sqlx::query::<sqlx::Postgres>(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
         )
@@ -144,7 +148,9 @@ mod tests {
     }
 
     async fn cleanup_mysql_schema(exec: &SqlxExecutor) {
-        let DbPool::MySql(pool) = exec.pool() else { return };
+        let DbPool::MySql(pool) = exec.pool() else {
+            return;
+        };
         let _ = sqlx::query::<sqlx::MySql>("SET FOREIGN_KEY_CHECKS = 0")
             .execute(pool)
             .await;
@@ -189,7 +195,8 @@ mod tests {
             .await
             .unwrap();
 
-        let result = exec.execute("SELECT id, label, amount FROM pg_test")
+        let result = exec
+            .execute("SELECT id, label, amount FROM pg_test")
             .await
             .unwrap();
 
@@ -222,7 +229,8 @@ mod tests {
             .await
             .unwrap();
 
-        let result = exec.execute("SELECT id, label, amount, created_at, payload FROM mysql_test")
+        let result = exec
+            .execute("SELECT id, label, amount, created_at, payload FROM mysql_test")
             .await
             .unwrap();
 
@@ -230,7 +238,10 @@ mod tests {
         assert_eq!(result.rows[0][0], CellValue::I64(1));
         assert_eq!(result.rows[0][1], CellValue::String("hello".to_string()));
         assert_eq!(result.rows[0][2], CellValue::String("42.00".to_string()));
-        assert_eq!(result.rows[0][3], CellValue::String("2024-01-15 10:30:00".to_string()));
+        assert_eq!(
+            result.rows[0][3],
+            CellValue::String("2024-01-15 10:30:00".to_string())
+        );
         // MySQL may return JSON with compact formatting; verify it contains the key data.
         let json_str = match &result.rows[0][4] {
             CellValue::String(s) => s.clone(),
@@ -240,7 +251,9 @@ mod tests {
         assert!(json_str.contains("\"value\""));
 
         // Clean up.
-        exec.execute("DROP TABLE IF EXISTS mysql_test").await.unwrap();
+        exec.execute("DROP TABLE IF EXISTS mysql_test")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -268,7 +281,9 @@ mod tests {
             .expect("public schema should exist");
         assert!(public.tables.contains(&"pg_introspect_test".to_string()));
 
-        let _ = exec.execute("DROP TABLE IF EXISTS pg_introspect_test").await;
+        let _ = exec
+            .execute("DROP TABLE IF EXISTS pg_introspect_test")
+            .await;
     }
 
     #[tokio::test]
@@ -294,9 +309,14 @@ mod tests {
             .iter()
             .find(|s| s.name == "sextant_test")
             .expect("sextant_test schema should exist");
-        assert!(sextant_test.tables.contains(&"mysql_introspect_test".to_string()));
+        assert!(
+            sextant_test
+                .tables
+                .contains(&"mysql_introspect_test".to_string())
+        );
 
-        let _ = exec.execute("DROP TABLE IF EXISTS mysql_introspect_test").await;
+        let _ = exec
+            .execute("DROP TABLE IF EXISTS mysql_introspect_test")
+            .await;
     }
 }
-

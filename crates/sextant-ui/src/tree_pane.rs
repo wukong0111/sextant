@@ -1,10 +1,10 @@
 //! Sidebar tree pane for connections, schemas and tables.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     widgets::{Block, Borders, List, ListItem},
-    Frame,
 };
 
 /// A schema with its tables inside the tree.
@@ -21,7 +21,10 @@ pub struct SchemaItem {
 pub enum ConnState {
     Disconnected,
     Connecting,
-    Connected { expanded: bool, schemas: Vec<SchemaItem> },
+    Connected {
+        expanded: bool,
+        schemas: Vec<SchemaItem>,
+    },
     Error(String),
 }
 
@@ -35,8 +38,15 @@ pub struct ConnectionItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
     Connection,
-    Schema { conn: usize, schema: usize },
-    Table { conn: usize, schema: usize, table: usize },
+    Schema {
+        conn: usize,
+        schema: usize,
+    },
+    Table {
+        conn: usize,
+        schema: usize,
+        table: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -90,7 +100,9 @@ impl TreePane {
     /// Toggle expand/collapse on the selected connection or schema.
     pub fn toggle_selected(&mut self) {
         let lines = self.visible_lines();
-        let Some(line) = lines.get(self.selected) else { return };
+        let Some(line) = lines.get(self.selected) else {
+            return;
+        };
         match line.kind {
             LineKind::Connection => {
                 // Count connections up to this point to find index.
@@ -102,7 +114,11 @@ impl TreePane {
                         break;
                     }
                     line_idx += 1;
-                    if let ConnState::Connected { expanded: true, schemas } = &c.state {
+                    if let ConnState::Connected {
+                        expanded: true,
+                        schemas,
+                    } = &c.state
+                    {
                         for s in schemas {
                             line_idx += 1;
                             if s.expanded {
@@ -111,8 +127,7 @@ impl TreePane {
                         }
                     }
                 }
-                if let ConnState::Connected { expanded, .. } =
-                    &mut self.connections[conn_idx].state
+                if let ConnState::Connected { expanded, .. } = &mut self.connections[conn_idx].state
                 {
                     *expanded = !*expanded;
                 }
@@ -169,7 +184,11 @@ impl TreePane {
                 break;
             }
             line_idx += 1;
-            if let ConnState::Connected { expanded: true, schemas } = &c.state {
+            if let ConnState::Connected {
+                expanded: true,
+                schemas,
+            } = &c.state
+            {
                 for s in schemas {
                     line_idx += 1;
                     if s.expanded {
@@ -192,7 +211,9 @@ impl TreePane {
             let prefix = match &conn.state {
                 ConnState::Disconnected => "  ",
                 ConnState::Connecting => "◌ ",
-                ConnState::Connected { expanded: false, .. } => "> ",
+                ConnState::Connected {
+                    expanded: false, ..
+                } => "> ",
                 ConnState::Connected { expanded: true, .. } => "v ",
                 ConnState::Error(_) => "! ",
             };
@@ -201,7 +222,11 @@ impl TreePane {
                 text: format!("{}{}", prefix, conn.name),
             });
 
-            if let ConnState::Connected { expanded: true, schemas } = &conn.state {
+            if let ConnState::Connected {
+                expanded: true,
+                schemas,
+            } = &conn.state
+            {
                 for (si, schema) in schemas.iter().enumerate() {
                     lines.push(Line {
                         kind: LineKind::Schema {
@@ -330,7 +355,10 @@ mod tests {
         assert_eq!(tree.visible_lines().len(), 1); // only conn, collapsed
         assert!(matches!(
             tree.connections[0].state,
-            ConnState::Connected { expanded: false, .. }
+            ConnState::Connected {
+                expanded: false,
+                ..
+            }
         ));
     }
 

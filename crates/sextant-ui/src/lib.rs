@@ -1,19 +1,19 @@
-use std::io::{self, stdout, Stdout};
+use std::io::{self, Stdout, stdout};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use ratatui::crossterm::{
-    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
+    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame, Terminal,
 };
 use sextant_core::QueryExecutor;
 use tokio::sync::mpsc::UnboundedSender;
@@ -203,7 +203,9 @@ impl App {
         };
         let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
-        let status = Line::from(vec![mode_span, conn_span, error_span, stats_span, hint_span]);
+        let status = Line::from(vec![
+            mode_span, conn_span, error_span, stats_span, hint_span,
+        ]);
         let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
         frame.render_widget(status_bar, outer[1]);
     }
@@ -322,11 +324,15 @@ impl App {
     }
 
     fn handle_enter(&mut self, tx: &UnboundedSender<AppMsg>) {
-        let Some(kind) = self.tree.selected_kind() else { return };
+        let Some(kind) = self.tree.selected_kind() else {
+            return;
+        };
 
         match kind {
             tree_pane::LineKind::Connection => {
-                let Some(conn_idx) = self.tree.selected_connection_index() else { return };
+                let Some(conn_idx) = self.tree.selected_connection_index() else {
+                    return;
+                };
                 let state = &self.tree.connections[conn_idx].state;
                 match state {
                     ConnState::Disconnected | ConnState::Error(_) => {
@@ -343,11 +349,15 @@ impl App {
     }
 
     fn handle_tree_right(&mut self, tx: &UnboundedSender<AppMsg>) {
-        let Some(kind) = self.tree.selected_kind() else { return };
+        let Some(kind) = self.tree.selected_kind() else {
+            return;
+        };
 
         match kind {
             tree_pane::LineKind::Connection => {
-                let Some(conn_idx) = self.tree.selected_connection_index() else { return };
+                let Some(conn_idx) = self.tree.selected_connection_index() else {
+                    return;
+                };
                 let name = self.tree.connections[conn_idx].name.clone();
                 match &self.tree.connections[conn_idx].state {
                     ConnState::Disconnected | ConnState::Error(_) => {
@@ -378,12 +388,18 @@ impl App {
     }
 
     fn handle_tree_left(&mut self) {
-        let Some(kind) = self.tree.selected_kind() else { return };
+        let Some(kind) = self.tree.selected_kind() else {
+            return;
+        };
 
         match kind {
             tree_pane::LineKind::Connection => {
-                let Some(conn_idx) = self.tree.selected_connection_index() else { return };
-                if let ConnState::Connected { expanded: true, .. } = &self.tree.connections[conn_idx].state {
+                let Some(conn_idx) = self.tree.selected_connection_index() else {
+                    return;
+                };
+                if let ConnState::Connected { expanded: true, .. } =
+                    &self.tree.connections[conn_idx].state
+                {
                     self.tree.toggle_selected();
                 }
             }
@@ -418,24 +434,21 @@ impl App {
         tokio::spawn(async move {
             let mut mgr = sextant_db::ConnectionManager::new();
             match mgr.connect(&name, &config, password.as_deref()).await {
-                Ok(executor) => {
-                    match executor.introspect_schemas_and_tables(config.driver).await
-                    {
-                        Ok(schemas) => {
-                            let _ = tx.send(AppMsg::Connected {
-                                name,
-                                executor,
-                                schemas,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(AppMsg::ConnectionFailed {
-                                name,
-                                error: format!("{e}"),
-                            });
-                        }
+                Ok(executor) => match executor.introspect_schemas_and_tables(config.driver).await {
+                    Ok(schemas) => {
+                        let _ = tx.send(AppMsg::Connected {
+                            name,
+                            executor,
+                            schemas,
+                        });
                     }
-                }
+                    Err(e) => {
+                        let _ = tx.send(AppMsg::ConnectionFailed {
+                            name,
+                            error: format!("{e}"),
+                        });
+                    }
+                },
                 Err(e) => {
                     let _ = tx.send(AppMsg::ConnectionFailed {
                         name,
@@ -666,7 +679,10 @@ mod tests {
         let buf = terminal.backend().buffer();
         let last_row = buf.content.chunks(buf.area.width as usize).last().unwrap();
         let text: String = last_row.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("INS"), "status line should show Insert mode: {text}");
+        assert!(
+            text.contains("INS"),
+            "status line should show Insert mode: {text}"
+        );
 
         let idx = last_row.iter().position(|c| c.symbol() == "I").unwrap();
         assert_eq!(last_row[idx].style().bg, Some(Color::Yellow));
@@ -707,7 +723,11 @@ mod tests {
         // With width 40, sidebar is 25% = 10 cols, main starts at col 10.
         for y in [0, 5] {
             let cell = &buf[(15, y)];
-            assert_eq!(cell.style().bg, Some(Color::Black), "bg at (15,{y}) should be Black");
+            assert_eq!(
+                cell.style().bg,
+                Some(Color::Black),
+                "bg at (15,{y}) should be Black"
+            );
         }
     }
 
@@ -727,7 +747,11 @@ mod tests {
             .collect();
 
         // Row 9 should contain the status line text.
-        assert!(rows[9].contains("NOR"), "last row should contain status: {}", rows[9]);
+        assert!(
+            rows[9].contains("NOR"),
+            "last row should contain status: {}",
+            rows[9]
+        );
     }
 
     #[test]
@@ -743,7 +767,10 @@ mod tests {
         // Check that column 9 has a border character.
         let border_cell = &buf[(9, 0)];
         assert!(
-            border_cell.symbol() == "│" || border_cell.symbol() == "┐" || border_cell.symbol() == "┘" || border_cell.symbol() == "┤",
+            border_cell.symbol() == "│"
+                || border_cell.symbol() == "┐"
+                || border_cell.symbol() == "┘"
+                || border_cell.symbol() == "┤",
             "expected border at col 9, got: {}",
             border_cell.symbol()
         );
@@ -765,11 +792,13 @@ mod tests {
     #[test]
     fn ignores_key_release() {
         let mut app = test_app();
-        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new_with_kind(
-            KeyCode::Char('q'),
-            KeyModifiers::CONTROL,
-            KeyEventKind::Release,
-        )));
+        app.handle_event(Event::Key(
+            ratatui::crossterm::event::KeyEvent::new_with_kind(
+                KeyCode::Char('q'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Release,
+            ),
+        ));
         assert!(!app.should_quit);
     }
 
@@ -880,7 +909,10 @@ mod tests {
         let buf = terminal.backend().buffer();
         // The modal should contain the "SQL Editor" title somewhere.
         let text: String = buf.content.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("SQL Editor"), "modal should render title: {text}");
+        assert!(
+            text.contains("SQL Editor"),
+            "modal should render title: {text}"
+        );
     }
 
     #[test]
@@ -1102,8 +1134,14 @@ mod tests {
                 },
             ],
             rows: vec![
-                vec![sextant_core::CellValue::I64(1), sextant_core::CellValue::String("Alice".into())],
-                vec![sextant_core::CellValue::I64(2), sextant_core::CellValue::String("Bob".into())],
+                vec![
+                    sextant_core::CellValue::I64(1),
+                    sextant_core::CellValue::String("Alice".into()),
+                ],
+                vec![
+                    sextant_core::CellValue::I64(2),
+                    sextant_core::CellValue::String("Bob".into()),
+                ],
             ],
             rows_affected: None,
         });

@@ -77,5 +77,3 @@ pub trait QueryExecutor: Send + Sync {
         sql: &str,
     ) -> impl std::future::Future<Output = Result<QueryResult, SextantError>> + Send;
 }
-
-
