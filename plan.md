@@ -12,7 +12,7 @@
 |------|--------|--------|
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
 | Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `4a2636e` (fix SQLite BOOLEAN) |
-| Fase 2 — v0.2 | 🔄 En progreso | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup) |
+| Fase 2 — v0.2 | 🔄 En progreso | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup), `76858c7` (chore: normalización fmt/clippy toolchain 1.96), `2de33b5` (base: introspección de columnas + PK + cache), `c826b0c` (base: quote_ident + DDL `CREATE TABLE`), `b8bc78f` (2.4 columnas en árbol + browse rows + DDL) |
 | Fase 3 — v1 | ⬜ Pendiente | — |
 
 ## Principios Directores
@@ -196,14 +196,17 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - Popup flotante sobre el editor (`<C-Space>` para trigger manual; también automático tras `.`).
 - Cache de metadata del schema reutilizando la introspección de `sextant-db` (refrescada al conectar o manualmente).
 
-### 2.4 Schema Viewer + DDL
+### 2.4 Schema Viewer + DDL 🔄 (parcial)
 
-- Árbol enriquecido:
-  - Expandir tabla → `Columns`, `Indexes`, `Constraints`, `Foreign Keys`.
-  - `Enter` (o `l`/`→`) en tabla → browse rows: ejecutar `SELECT * FROM {tabla} LIMIT 500` y mostrar en grid.
-  - `Enter` en columna/índice → detalle en panel (a definir: split horizontal o popup).
-- `D` en tabla → emitir `CREATE TABLE` skeleton al editor (abre editor modal con el DDL).
-- Generar DDL básico desde metadata (tipos, defaults, constraints).
+> **Base compartida** (`2de33b5`, `c826b0c`): `SqlxExecutor::introspect_columns` (columnas + tipos + nullable + default + PK por dialecto) cacheado en `App.table_meta` al conectar, y helpers `quote_ident`/`generate_create_table` en `sextant-db::sql`.
+
+- [x] ✅ Árbol enriquecido — **columnas**: `l`/`→` expande la tabla y muestra columnas (nombre, tipo, marca `PK`) desde el cache; `h` colapsa. (`b8bc78f`)
+- [x] ✅ `Enter` en tabla → browse rows: `SELECT * FROM {tabla} LIMIT 500` en el grid (helper `run_sql`). (`b8bc78f`)
+- [x] ✅ `D` en tabla → emitir `CREATE TABLE` skeleton al editor desde metadata (tipos, NOT NULL, defaults, PK). (`b8bc78f`)
+- [ ] ⬜ **Indexes / Foreign Keys** en el árbol (`introspect_table_detail` perezoso al expandir + `AppMsg::TableDetailLoaded`). *Diferido* del primer commit de 2.4 por ratio valor/coste (queries de catálogo por backend); siguiente sub-tarea de 2.4.
+- [ ] ⬜ `Enter` en columna/índice → detalle en panel (a definir).
+
+> **Divergencia respecto al plan original**: `l`=expandir y `Enter`=browse se separan (antes el plan decía "Enter o l → browse"), siguiendo el spec §9 (Tree Pane: `h`/`l` colapsar/expandir, `<Enter>` abrir objeto). Indexes/FKs se sacan del primer commit y quedan como sub-tarea pendiente de 2.4.
 
 ### 2.5 Buffer Management (múltiples tabs)
 
