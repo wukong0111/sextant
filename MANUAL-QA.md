@@ -9,6 +9,12 @@ y **2.5 buffers/tabs + guardado**. Complementa a los tests automáticos
 > **tu** terminal (no a través de un agente). Los comandos de preparación
 > (`make …`, `sqlite3 …`) sí son no interactivos.
 
+> **QA automático (sin TTY).** Parte de esto ya se puede ejercitar sin terminal:
+> `make e2e` corre tests end-to-end que pilotan el binario real por un
+> pseudo-terminal, y `make smoke` imprime "capturas" de la pantalla en vivo. Ver
+> `AGENTS.md` → *End-to-end TUI tests (PTY)* y `crates/sextant-cli/tests/`. Esta
+> guía manual sigue cubriendo lo que aún no está automatizado (colores, UX fina).
+
 ---
 
 ## 1. Requisitos

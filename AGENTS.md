@@ -109,10 +109,12 @@ The binary opens a TUI window. In the current Phase 0 implementation it shows a 
 
 ### End-to-end TUI tests (PTY)
 
-`crates/sextant-cli/tests/e2e.rs` drives the **real `sextant` binary** through a
-pseudo-terminal — the TUI analogue of a Playwright suite. It spawns the binary
-(`portable-pty`), parses its ANSI output into a virtual screen (`vt100`), and
-asserts on the rendered text. Key points:
+The shared harness in `crates/sextant-cli/tests/common/mod.rs` (`Tui` + `Fixture`)
+drives the **real `sextant` binary** through a pseudo-terminal — the TUI analogue
+of a Playwright suite. It spawns the binary (`portable-pty`), parses its ANSI
+output into a virtual screen (`vt100`), and asserts on the rendered text.
+`tests/e2e.rs` holds the assertions; `tests/smoke.rs` holds `#[ignore]`d
+on-demand "screenshots" for eyeballing the live app. Key points:
 
 - **Hermetic**: a temp `HOME`/`XDG_CONFIG_HOME`/`XDG_DATA_HOME` plus a seeded
   SQLite file (`rusqlite`) — no Docker, no touching the user's config.
@@ -123,7 +125,8 @@ asserts on the rendered text. Key points:
 - **Cross-check the backend**: tests can assert on `state.db` (in the temp
   `XDG_DATA_HOME`) after driving the UI — e.g. that a run query was recorded.
 
-Run with `cargo test -p sextant-cli --test e2e`.
+Run with `make e2e` (PTY tests, no Docker) or `make smoke` (print live
+screenshots without a TTY).
 
 ### Integration Tests with Docker
 
@@ -230,6 +233,9 @@ When the user says "vamos con la Fase X" or "implementa el punto Y":
 | `cargo test -p <crate>` | Run one crate's tests (e.g. `-p sextant-db`) |
 | `cargo run` | Start the TUI |
 | `cargo run --bin sextant` | Same as above (explicit binary) |
+| `make check` | Full verification: compile, test, fmt check, clippy |
+| `make e2e` | PTY end-to-end tests (SQLite only, no Docker) |
+| `make smoke` | Print live "screenshots" of the running TUI (no TTY) |
 | `make seed-sqlite` | Seed the local `test.db` (SQLite) |
 | `make seed` | Seed all DBs (PostgreSQL, MySQL, SQLite) |
 | `make test-db` | Full cycle: start Docker DBs, run tests, tear down |
