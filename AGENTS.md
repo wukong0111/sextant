@@ -107,6 +107,24 @@ The binary opens a TUI window. In the current Phase 0 implementation it shows a 
 - TUI integration tests can use `screen` to create a pseudo-tty, send `\x11` (`Ctrl+Q`), and verify exit code 0.
 - Database tests should use temporary SQLite files or test containers for PG/MySQL.
 
+### End-to-end TUI tests (PTY)
+
+`crates/sextant-cli/tests/e2e.rs` drives the **real `sextant` binary** through a
+pseudo-terminal — the TUI analogue of a Playwright suite. It spawns the binary
+(`portable-pty`), parses its ANSI output into a virtual screen (`vt100`), and
+asserts on the rendered text. Key points:
+
+- **Hermetic**: a temp `HOME`/`XDG_CONFIG_HOME`/`XDG_DATA_HOME` plus a seeded
+  SQLite file (`rusqlite`) — no Docker, no touching the user's config.
+- **Auto-wait, not sleep**: `Tui::wait_for(needle, timeout)` polls the parsed
+  screen until the expected text appears (like `expect().toBeVisible()`).
+- **Pace keystrokes**: each key write is followed by a short delay; a lone `Esc`
+  needs an extra pause so crossterm doesn't read it as an escape sequence.
+- **Cross-check the backend**: tests can assert on `state.db` (in the temp
+  `XDG_DATA_HOME`) after driving the UI — e.g. that a run query was recorded.
+
+Run with `cargo test -p sextant-cli --test e2e`.
+
 ### Integration Tests with Docker
 
 A `compose.yml` provides PostgreSQL and MySQL test containers. Requirements: Docker + Docker Compose v2.
