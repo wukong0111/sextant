@@ -6,11 +6,13 @@ use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent},
     layout::{Constraint, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Row, Table},
 };
 use sextant_core::{CellValue, Driver, QueryResult};
+
+use crate::palette::Palette;
 
 /// Identifies the table a grid was populated from, enabling edits.
 ///
@@ -48,12 +50,19 @@ pub struct ResultGrid {
     new_rows: Vec<Vec<Option<String>>>,
     /// Active inline cell edit, if any.
     editing: Option<CellEdit>,
+    /// Colors used when rendering.
+    palette: Palette,
 }
 
 impl ResultGrid {
     /// Create an empty grid.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the color palette used when rendering.
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
     }
 
     /// Replace the displayed result and reset cursor + pending edits.
@@ -382,23 +391,21 @@ impl ResultGrid {
 
     /// Render the grid (or a placeholder) into `area`.
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let p = self.palette;
         let Some(ref result) = self.result else {
             let placeholder = Block::default()
                 .borders(Borders::NONE)
-                .style(Style::default().bg(Color::Black));
+                .style(Style::default().bg(p.background));
             frame.render_widget(placeholder, area);
             return;
         };
 
         if result.columns.is_empty() || (result.rows.is_empty() && self.new_rows.is_empty()) {
-            let text = Line::from(Span::styled(
-                "No results",
-                Style::default().fg(Color::DarkGray),
-            ));
+            let text = Line::from(Span::styled("No results", Style::default().fg(p.muted)));
             let para = ratatui::widgets::Paragraph::new(text).block(
                 Block::default()
                     .borders(Borders::NONE)
-                    .style(Style::default().bg(Color::Black)),
+                    .style(Style::default().bg(p.background)),
             );
             frame.render_widget(para, area);
             return;
@@ -413,14 +420,14 @@ impl ResultGrid {
             .enumerate()
             .map(|(i, col)| {
                 let style = if i == self.cursor_col {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default().fg(p.selection_fg).bg(p.selection_bg)
                 } else {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(p.accent)
                 };
                 Cell::new(col.name.clone()).style(style)
             })
             .collect();
-        let header = Row::new(header_cells).style(Style::default().bg(Color::Black));
+        let header = Row::new(header_cells).style(Style::default().bg(p.background));
 
         let rows: Vec<Row> = (0..self.total_rows())
             .map(|row_idx| {
@@ -441,19 +448,19 @@ impl ResultGrid {
                         let is_active = row_idx == self.cursor_row && col_idx == self.cursor_col;
                         let is_edited = self.edits.contains_key(&(row_idx, col_idx));
                         let style = if is_active {
-                            Style::default().fg(Color::Black).bg(Color::Yellow)
+                            Style::default().fg(p.background).bg(p.accent_alt)
                         } else if is_deleted {
                             Style::default()
-                                .fg(Color::Red)
+                                .fg(p.error)
                                 .add_modifier(Modifier::CROSSED_OUT)
                         } else if is_new {
-                            Style::default().fg(Color::Green)
+                            Style::default().fg(p.success)
                         } else if is_edited {
-                            Style::default().fg(Color::Yellow)
+                            Style::default().fg(p.accent_alt)
                         } else if row_idx == self.cursor_row {
-                            Style::default().bg(Color::DarkGray)
+                            Style::default().bg(p.muted)
                         } else {
-                            Style::default()
+                            Style::default().fg(p.foreground)
                         };
                         Cell::new(text).style(style)
                     })
@@ -470,7 +477,7 @@ impl ResultGrid {
         let table = Table::new(rows, constraints).header(header).block(
             Block::default()
                 .borders(Borders::NONE)
-                .style(Style::default().bg(Color::Black)),
+                .style(Style::default().bg(p.background)),
         );
 
         frame.render_widget(table, area);

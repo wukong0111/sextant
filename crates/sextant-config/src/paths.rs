@@ -24,6 +24,12 @@ pub fn queries_dir() -> PathBuf {
     data_dir().join("queries")
 }
 
+/// Returns the directory where custom theme files live
+/// (`$XDG_CONFIG_HOME/sextant/themes` or `~/.config/sextant/themes`).
+pub fn themes_dir() -> PathBuf {
+    config_dir().join("themes")
+}
+
 /// Returns the directory where exported result sets are written
 /// (`$XDG_DATA_HOME/sextant/exports` or `~/.local/share/sextant/exports`).
 pub fn exports_dir() -> PathBuf {

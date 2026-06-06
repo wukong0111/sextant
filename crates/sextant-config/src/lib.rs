@@ -6,7 +6,10 @@ use sextant_core::{Connection, SextantError};
 
 mod parser;
 mod paths;
+mod theme;
 mod validation;
+
+pub use theme::{Theme, load_theme, load_theme_from};
 
 /// Load connections from the default XDG configuration path
 /// (`~/.config/sextant/connections.toml`).
@@ -50,6 +53,11 @@ pub fn config_dir() -> std::path::PathBuf {
 /// Return the directory where saved `.sql` queries live.
 pub fn queries_dir() -> std::path::PathBuf {
     paths::queries_dir()
+}
+
+/// Return the directory where custom theme `.toml` files live.
+pub fn themes_dir() -> std::path::PathBuf {
+    paths::themes_dir()
 }
 
 /// Return the directory where exported result sets are written.

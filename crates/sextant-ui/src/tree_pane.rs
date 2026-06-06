@@ -3,9 +3,11 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Borders, List, ListItem},
 };
+
+use crate::palette::Palette;
 
 /// A column node shown under an expanded table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +106,7 @@ struct Line {
 pub struct TreePane {
     pub connections: Vec<ConnectionItem>,
     pub selected: usize,
+    palette: Palette,
 }
 
 impl TreePane {
@@ -118,7 +121,13 @@ impl TreePane {
                 })
                 .collect(),
             selected: 0,
+            palette: Palette::default(),
         }
+    }
+
+    /// Set the color palette used when rendering.
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
     }
 
     /// Move selection down.
@@ -378,9 +387,11 @@ impl TreePane {
             .enumerate()
             .map(|(i, line)| {
                 let style = if i == self.selected {
-                    Style::default().bg(Color::DarkGray)
-                } else {
                     Style::default()
+                        .fg(self.palette.selection_fg)
+                        .bg(self.palette.selection_bg)
+                } else {
+                    Style::default().fg(self.palette.foreground)
                 };
                 ListItem::new(line.text.clone()).style(style)
             })

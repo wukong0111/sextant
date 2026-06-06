@@ -11,7 +11,7 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -19,6 +19,9 @@ use sextant_core::QueryExecutor;
 use tokio::sync::mpsc::UnboundedSender;
 
 mod autocomplete;
+
+mod palette;
+use palette::Palette;
 
 mod editor_modal;
 use editor_modal::{EditorAction, EditorModal};
@@ -195,6 +198,8 @@ pub struct App {
     query_start: Option<Instant>,
     focus: Focus,
     result_grid: ResultGrid,
+    /// Resolved theme colors used across the UI.
+    palette: Palette,
     needs_redraw: bool,
 }
 
@@ -205,7 +210,16 @@ impl App {
             vec![]
         });
         let names: Vec<String> = connections.iter().map(|c| c.name.clone()).collect();
-        let tree = TreePane::new(names);
+
+        // Resolve the configured theme into concrete colors, then seed every
+        // widget with it (a single global palette; no runtime switching yet).
+        let palette = Palette::from_theme(&sextant_config::load_theme());
+        let mut tree = TreePane::new(names);
+        tree.set_palette(palette);
+        let mut editor = EditorModal::new();
+        editor.set_palette(palette);
+        let mut result_grid = ResultGrid::new();
+        result_grid.set_palette(palette);
 
         Ok(Self {
             mode: Mode::Normal,
@@ -215,7 +229,7 @@ impl App {
             connection_configs: connections,
             executors: std::collections::HashMap::new(),
             editor_open: false,
-            editor: EditorModal::new(),
+            editor,
             pending_leader: false,
             pending_g: false,
             pending_d: false,
@@ -236,7 +250,8 @@ impl App {
             last_query_duration: None,
             query_start: None,
             focus: Focus::Tree,
-            result_grid: ResultGrid::new(),
+            result_grid,
+            palette,
             needs_redraw: true,
         })
     }
@@ -271,74 +286,78 @@ impl App {
 
         // Commit-confirmation modal (floating overlay).
         if let Some(statements) = &self.pending_commit {
-            render_commit_modal(frame, area, statements);
+            render_commit_modal(frame, area, statements, self.palette);
         }
 
         // Save-as filename prompt.
         if let Some(name) = &self.save_prompt {
-            render_save_prompt(frame, area, name);
+            render_save_prompt(frame, area, name, self.palette);
         }
 
         // Quit-with-unsaved-buffers prompt.
         if self.quit_prompt {
-            render_quit_prompt(frame, area);
+            render_quit_prompt(frame, area, self.palette);
         }
 
         // Modal list picker (history / recent files).
         if let Some(picker) = &self.picker {
-            render_picker(frame, area, picker);
+            render_picker(frame, area, picker, self.palette);
         }
 
         // Import file-path prompt.
         if let Some(prompt) = &self.import_prompt {
-            render_import_prompt(frame, area, prompt);
+            render_import_prompt(frame, area, prompt, self.palette);
         }
 
         // Import confirmation modal.
         if let Some(pending) = &self.pending_import {
-            render_import_modal(frame, area, pending);
+            render_import_modal(frame, area, pending, self.palette);
         }
 
         // Destructive-statement confirmation modal.
         if let Some(dangerous) = &self.pending_dangerous {
-            render_dangerous_modal(frame, area, dangerous);
+            render_dangerous_modal(frame, area, dangerous, self.palette);
         }
 
         // Status line at the bottom.
+        let p = self.palette;
         let mode_span = Span::styled(
             format!(" {} ", self.mode),
             Style::default()
-                .fg(Color::Black)
+                .fg(p.background)
                 .bg(if self.mode == Mode::Normal {
-                    Color::Cyan
+                    p.accent
                 } else {
-                    Color::Yellow
+                    p.accent_alt
                 }),
         );
 
-        let conn_span = Span::raw(format!(
-            " {} ",
-            self.connection_name.as_deref().unwrap_or("no connection")
-        ));
+        let conn_span = Span::styled(
+            format!(
+                " {} ",
+                self.connection_name.as_deref().unwrap_or("no connection")
+            ),
+            Style::default().fg(p.foreground),
+        );
 
-        // Transaction indicator: only an open session transaction is flagged
-        // (amber). Autocommit is the implicit default and shows nothing, which
-        // keeps the status line within its width budget.
+        // Transaction indicator: only an open session transaction is flagged.
+        // Autocommit is the implicit default and shows nothing, which keeps the
+        // status line within its width budget.
         let txn_active = self
             .connection_name
             .as_deref()
             .and_then(|name| self.executors.get(name))
             .is_some_and(|exec| exec.in_transaction());
         let txn_span = if txn_active {
-            Span::styled("txn: ACTIVE ", Style::default().fg(Color::Rgb(255, 176, 0)))
+            Span::styled("txn: ACTIVE ", Style::default().fg(p.accent_alt))
         } else {
             Span::raw("")
         };
 
         let error_span = if let Some(ref err) = self.last_error {
-            Span::styled(format!(" ERR: {} │ ", err), Style::default().fg(Color::Red))
+            Span::styled(format!(" ERR: {} │ ", err), Style::default().fg(p.error))
         } else if let Some(ref notice) = self.last_notice {
-            Span::styled(format!(" {} │ ", notice), Style::default().fg(Color::Green))
+            Span::styled(format!(" {} │ ", notice), Style::default().fg(p.success))
         } else {
             Span::raw("")
         };
@@ -349,7 +368,10 @@ impl App {
                 .last_query_duration
                 .map(|d| format!("{}ms", d.as_millis()))
                 .unwrap_or_else(|| "-".into());
-            Span::raw(format!(" {rows} rows / {dur} │ "))
+            Span::styled(
+                format!(" {rows} rows / {dur} │ "),
+                Style::default().fg(p.foreground),
+            )
         } else {
             Span::raw(" ")
         };
@@ -357,11 +379,11 @@ impl App {
         // Editability / pending-changes indicator.
         let edit_span = if self.result_grid.result().is_some() {
             if !self.result_grid.is_editable() {
-                Span::styled("🔒 │ ", Style::default().fg(Color::DarkGray))
+                Span::styled("🔒 │ ", Style::default().fg(p.muted))
             } else if self.result_grid.has_pending() {
                 Span::styled(
                     format!("✎ {} pending │ ", self.result_grid.pending_count()),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(p.accent_alt),
                 )
             } else {
                 Span::raw("")
@@ -381,12 +403,12 @@ impl App {
         } else {
             " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <Space>i import │ <C-q> quit "
         };
-        let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
+        let hint_span = Span::styled(hint, Style::default().fg(p.muted));
 
         let status = Line::from(vec![
             mode_span, conn_span, txn_span, error_span, stats_span, edit_span, hint_span,
         ]);
-        let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
+        let status_bar = Paragraph::new(status).style(Style::default().bg(p.background));
         frame.render_widget(status_bar, outer[1]);
     }
 
@@ -1719,7 +1741,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Re
 }
 
 /// Render the commit-confirmation modal listing the statements to be run.
-fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String]) {
+fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String], p: Palette) {
     let width = (area.width as f32 * 0.7) as u16;
     let height = (statements.len() as u16 + 4).min(area.height.max(4));
     let x = area.x + (area.width.saturating_sub(width)) / 2;
@@ -1733,14 +1755,17 @@ fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String]) {
 
     let mut lines: Vec<Line> = vec![Line::from(Span::styled(
         "Commit these changes?",
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(p.accent_alt),
     ))];
     for s in statements {
-        lines.push(Line::from(Span::raw(format!("  {s}"))));
+        lines.push(Line::from(Span::styled(
+            format!("  {s}"),
+            Style::default().fg(p.foreground),
+        )));
     }
     lines.push(Line::from(Span::styled(
         "<Enter>/y confirm   <Esc>/n cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(p.muted),
     )));
 
     frame.render_widget(Clear, rect);
@@ -1749,15 +1774,15 @@ fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String]) {
             Block::default()
                 .title(" Confirm commit ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .style(Style::default().bg(Color::Black)),
+                .border_style(Style::default().fg(p.accent_alt))
+                .style(Style::default().bg(p.background)),
         ),
         rect,
     );
 }
 
 /// Render a small centered modal with the given title and body lines.
-fn render_centered_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
+fn render_centered_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, p: Palette) {
     let width = (area.width as f32 * 0.6).max(20.0) as u16;
     let height = (lines.len() as u16 + 2).min(area.height.max(3));
     let x = area.x + (area.width.saturating_sub(width)) / 2;
@@ -1774,8 +1799,8 @@ fn render_centered_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<
             Block::default()
                 .title(format!(" {title} "))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .style(Style::default().bg(Color::Black)),
+                .border_style(Style::default().fg(p.accent_alt))
+                .style(Style::default().bg(p.background)),
         ),
         rect,
     );
@@ -1810,37 +1835,41 @@ fn import_summary(table: &str, preview: &sextant_db::ImportPreview) -> Vec<Strin
 }
 
 /// Render the import file-path prompt.
-fn render_import_prompt(frame: &mut Frame, area: Rect, prompt: &ImportPrompt) {
+fn render_import_prompt(frame: &mut Frame, area: Rect, prompt: &ImportPrompt, p: Palette) {
     render_centered_modal(
         frame,
         area,
         &format!("Import into {}", prompt.table),
         vec![
-            Line::from(format!("{}_", prompt.path)),
+            Line::from(Span::styled(
+                format!("{}_", prompt.path),
+                Style::default().fg(p.foreground),
+            )),
             Line::from(Span::styled(
                 "path to .csv/.json/.sql (abs, or under exports dir) │ <Enter> load │ <Esc> cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(p.muted),
             )),
         ],
+        p,
     );
 }
 
 /// Render the import-confirmation modal listing the summary of what will run.
-fn render_import_modal(frame: &mut Frame, area: Rect, pending: &PendingImport) {
+fn render_import_modal(frame: &mut Frame, area: Rect, pending: &PendingImport, p: Palette) {
     let mut lines: Vec<Line> = pending
         .summary
         .iter()
-        .map(|s| Line::from(Span::raw(s.clone())))
+        .map(|s| Line::from(Span::styled(s.clone(), Style::default().fg(p.foreground))))
         .collect();
     lines.push(Line::from(Span::styled(
         "<Enter>/y import   <Esc>/n cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(p.muted),
     )));
-    render_centered_modal(frame, area, "Confirm import", lines);
+    render_centered_modal(frame, area, "Confirm import", lines, p);
 }
 
 /// Render the destructive-statement confirmation modal.
-fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousStmt) {
+fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousStmt, p: Palette) {
     let first = dangerous.sql.lines().next().unwrap_or("").trim();
     render_centered_modal(
         frame,
@@ -1849,30 +1878,38 @@ fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousSt
         vec![
             Line::from(Span::styled(
                 format!("⚠ {}", dangerous.reason),
-                Style::default().fg(Color::Red),
+                Style::default().fg(p.error),
             )),
-            Line::from(Span::raw(format!("  {}", truncate(first, 70)))),
+            Line::from(Span::styled(
+                format!("  {}", truncate(first, 70)),
+                Style::default().fg(p.foreground),
+            )),
             Line::from(Span::styled(
                 "<Enter>/y run   <Esc>/n cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(p.muted),
             )),
         ],
+        p,
     );
 }
 
 /// Render the Save-as filename prompt.
-fn render_save_prompt(frame: &mut Frame, area: Rect, name: &str) {
+fn render_save_prompt(frame: &mut Frame, area: Rect, name: &str, p: Palette) {
     render_centered_modal(
         frame,
         area,
         "Save as",
         vec![
-            Line::from(format!("{name}_")),
+            Line::from(Span::styled(
+                format!("{name}_"),
+                Style::default().fg(p.foreground),
+            )),
             Line::from(Span::styled(
                 "type a name (.sql) │ <Enter> save │ <Esc> cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(p.muted),
             )),
         ],
+        p,
     );
 }
 
@@ -1887,7 +1924,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// Render a modal list picker (query history / recent files).
-fn render_picker(frame: &mut Frame, area: Rect, picker: &Picker) {
+fn render_picker(frame: &mut Frame, area: Rect, picker: &Picker, p: Palette) {
     let width = (area.width as f32 * 0.7).max(20.0) as u16;
     let height = ((picker.items.len() as u16).max(1) + 3).min(area.height.max(6));
     let x = area.x + (area.width.saturating_sub(width)) / 2;
@@ -1906,7 +1943,7 @@ fn render_picker(frame: &mut Frame, area: Rect, picker: &Picker) {
     let mut lines: Vec<Line> = if picker.items.is_empty() {
         vec![Line::from(Span::styled(
             "(empty)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(p.muted),
         ))]
     } else {
         picker
@@ -1919,17 +1956,20 @@ fn render_picker(frame: &mut Frame, area: Rect, picker: &Picker) {
                 if i == picker.selected {
                     Line::from(Span::styled(
                         format!("▶ {}", item.label),
-                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                        Style::default().fg(p.selection_fg).bg(p.selection_bg),
                     ))
                 } else {
-                    Line::from(Span::raw(format!("  {}", item.label)))
+                    Line::from(Span::styled(
+                        format!("  {}", item.label),
+                        Style::default().fg(p.foreground),
+                    ))
                 }
             })
             .collect()
     };
     lines.push(Line::from(Span::styled(
         "<j/k> move │ <Enter> open │ <Esc> close",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(p.muted),
     )));
 
     frame.render_widget(Clear, rect);
@@ -1938,26 +1978,30 @@ fn render_picker(frame: &mut Frame, area: Rect, picker: &Picker) {
             Block::default()
                 .title(format!(" {} ", picker.title))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .style(Style::default().bg(Color::Black)),
+                .border_style(Style::default().fg(p.accent))
+                .style(Style::default().bg(p.background)),
         ),
         rect,
     );
 }
 
 /// Render the quit-with-unsaved-buffers prompt.
-fn render_quit_prompt(frame: &mut Frame, area: Rect) {
+fn render_quit_prompt(frame: &mut Frame, area: Rect, p: Palette) {
     render_centered_modal(
         frame,
         area,
         "Unsaved buffers",
         vec![
-            Line::from("There are unsaved buffers."),
+            Line::from(Span::styled(
+                "There are unsaved buffers.",
+                Style::default().fg(p.foreground),
+            )),
             Line::from(Span::styled(
                 "s save │ d discard & quit │ c/<Esc> cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(p.muted),
             )),
         ],
+        p,
     );
 }
 
@@ -1965,6 +2009,7 @@ fn render_quit_prompt(frame: &mut Frame, area: Rect) {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
 
     fn test_app() -> App {
         App::new().unwrap()
