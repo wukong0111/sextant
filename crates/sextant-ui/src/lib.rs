@@ -108,6 +108,16 @@ struct ImportPrompt {
     path: String,
 }
 
+/// A destructive editor statement awaiting confirmation before it runs.
+struct DangerousStmt {
+    /// Connection whose executor will run the statement.
+    conn: String,
+    /// The SQL to run on confirmation.
+    sql: String,
+    /// Why it was flagged (shown in the modal).
+    reason: &'static str,
+}
+
 /// A parsed import awaiting confirmation in a modal.
 struct PendingImport {
     /// Connection whose executor runs the statements.
@@ -169,6 +179,8 @@ pub struct App {
     import_prompt: Option<ImportPrompt>,
     /// Parsed import awaiting confirmation, if any.
     pending_import: Option<PendingImport>,
+    /// Destructive editor statement awaiting confirmation, if any.
+    pending_dangerous: Option<DangerousStmt>,
     saved_buffers: std::collections::HashMap<String, String>,
     /// Column/PK metadata per connection, keyed by `(schema, table)`.
     table_meta: std::collections::HashMap<
@@ -215,6 +227,7 @@ impl App {
             picker: None,
             import_prompt: None,
             pending_import: None,
+            pending_dangerous: None,
             saved_buffers: std::collections::HashMap::new(),
             table_meta: std::collections::HashMap::new(),
             last_result: None,
@@ -286,6 +299,11 @@ impl App {
             render_import_modal(frame, area, pending);
         }
 
+        // Destructive-statement confirmation modal.
+        if let Some(dangerous) = &self.pending_dangerous {
+            render_dangerous_modal(frame, area, dangerous);
+        }
+
         // Status line at the bottom.
         let mode_span = Span::styled(
             format!(" {} ", self.mode),
@@ -302,6 +320,20 @@ impl App {
             " {} ",
             self.connection_name.as_deref().unwrap_or("no connection")
         ));
+
+        // Transaction indicator: only an open session transaction is flagged
+        // (amber). Autocommit is the implicit default and shows nothing, which
+        // keeps the status line within its width budget.
+        let txn_active = self
+            .connection_name
+            .as_deref()
+            .and_then(|name| self.executors.get(name))
+            .is_some_and(|exec| exec.in_transaction());
+        let txn_span = if txn_active {
+            Span::styled("txn: ACTIVE ", Style::default().fg(Color::Rgb(255, 176, 0)))
+        } else {
+            Span::raw("")
+        };
 
         let error_span = if let Some(ref err) = self.last_error {
             Span::styled(format!(" ERR: {} │ ", err), Style::default().fg(Color::Red))
@@ -352,7 +384,7 @@ impl App {
         let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
         let status = Line::from(vec![
-            mode_span, conn_span, error_span, stats_span, edit_span, hint_span,
+            mode_span, conn_span, txn_span, error_span, stats_span, edit_span, hint_span,
         ]);
         let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
         frame.render_widget(status_bar, outer[1]);
@@ -439,6 +471,16 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => self.picker_move(-1),
                 KeyCode::Enter => self.picker_select(tx),
                 KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
+                _ => {}
+            }
+            return;
+        }
+
+        // Destructive-statement confirmation swallows keys until dismissed.
+        if self.pending_dangerous.is_some() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') => self.confirm_dangerous(tx),
+                KeyCode::Esc | KeyCode::Char('n') => self.pending_dangerous = None,
                 _ => {}
             }
             return;
@@ -1041,10 +1083,34 @@ impl App {
             tracing::warn!("run_editor_sql: no connection_name");
             return;
         };
+        // Destructive statements (DELETE/UPDATE without WHERE, DDL) require a
+        // confirmation step before they run.
+        if let Some(reason) = sextant_db::dangerous_reason(&sql) {
+            self.pending_dangerous = Some(DangerousStmt {
+                conn: name,
+                sql,
+                reason,
+            });
+            return;
+        }
+        self.execute_editor_sql(name, sql, tx);
+    }
+
+    /// Run an editor statement: clear the (read-only) edit context, drop the
+    /// browse-replay SQL, and dispatch it to the executor (recorded in history).
+    fn execute_editor_sql(&mut self, name: String, sql: String, tx: &UnboundedSender<AppMsg>) {
         // Ad-hoc editor results are not tied to a browseable table → read-only.
         self.result_grid.set_edit_context(None);
         self.last_browse_sql = None;
         self.run_sql(&name, sql, tx, true);
+    }
+
+    /// Run the confirmed destructive statement.
+    fn confirm_dangerous(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(d) = self.pending_dangerous.take() else {
+            return;
+        };
+        self.execute_editor_sql(d.conn, d.sql, tx);
     }
 
     /// Spawn a query against the named connection's executor; the result is
@@ -1773,6 +1839,27 @@ fn render_import_modal(frame: &mut Frame, area: Rect, pending: &PendingImport) {
     render_centered_modal(frame, area, "Confirm import", lines);
 }
 
+/// Render the destructive-statement confirmation modal.
+fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousStmt) {
+    let first = dangerous.sql.lines().next().unwrap_or("").trim();
+    render_centered_modal(
+        frame,
+        area,
+        "Confirm destructive statement",
+        vec![
+            Line::from(Span::styled(
+                format!("⚠ {}", dangerous.reason),
+                Style::default().fg(Color::Red),
+            )),
+            Line::from(Span::raw(format!("  {}", truncate(first, 70)))),
+            Line::from(Span::styled(
+                "<Enter>/y run   <Esc>/n cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
+    );
+}
+
 /// Render the Save-as filename prompt.
 fn render_save_prompt(frame: &mut Frame, area: Rect, name: &str) {
     render_centered_modal(
@@ -2052,6 +2139,32 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn dangerous_editor_sql_requires_confirmation() {
+        let mut app = test_app();
+        app.connection_name = Some("c".into());
+        app.editor.set_content("DROP TABLE users");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.run_editor_sql(&tx);
+        assert!(
+            app.pending_dangerous.is_some(),
+            "DDL should stage a confirmation modal"
+        );
+    }
+
+    #[test]
+    fn safe_editor_sql_runs_without_prompt() {
+        let mut app = test_app();
+        app.connection_name = Some("c".into());
+        app.editor.set_content("SELECT 1");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.run_editor_sql(&tx);
+        assert!(
+            app.pending_dangerous.is_none(),
+            "a plain SELECT should not prompt"
+        );
     }
 
     #[test]

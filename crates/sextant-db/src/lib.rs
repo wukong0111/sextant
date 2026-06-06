@@ -13,8 +13,8 @@ pub use executor::{DbPool, SqlxExecutor};
 pub use export::ExportFormat;
 pub use import::{ImportData, ImportPreview};
 pub use sql::{
-    build_delete, build_insert, build_update, generate_create_table, qualified_table, quote_ident,
-    to_sql_literal,
+    build_delete, build_insert, build_update, dangerous_reason, generate_create_table,
+    qualified_table, quote_ident, to_sql_literal,
 };
 pub use url_builder::build_connection_url;
 

@@ -142,6 +142,38 @@ fn where_pk(driver: Driver, pk: &[(&str, &str)]) -> String {
         .join(" AND ")
 }
 
+/// Classify a statement as destructive, returning a human-readable reason.
+///
+/// Returns `Some(reason)` for statements that warrant a confirmation modal:
+/// `DELETE`/`UPDATE` without a `WHERE` clause (affecting every row), and any
+/// DDL (`DROP`/`TRUNCATE`/`ALTER`/`CREATE`/`RENAME`). Returns `None` for
+/// statements that are safe to run directly. The check is a leading-keyword
+/// heuristic — it does not parse the SQL.
+pub fn dangerous_reason(sql: &str) -> Option<&'static str> {
+    let upper = sql.trim_start().to_ascii_uppercase();
+    let first = upper
+        .split(|c: char| c.is_whitespace() || c == ';' || c == '(')
+        .next()
+        .unwrap_or("");
+
+    match first {
+        "DELETE" if !has_where(&upper) => Some("DELETE without WHERE affects every row"),
+        "UPDATE" if !has_where(&upper) => Some("UPDATE without WHERE affects every row"),
+        "DROP" | "TRUNCATE" | "ALTER" | "CREATE" | "RENAME" => Some("DDL statement"),
+        _ => None,
+    }
+}
+
+/// Whether an uppercased statement contains a `WHERE` clause keyword.
+///
+/// Matches `WHERE` as a whole word so identifiers like `wherewithal` don't
+/// count as a clause.
+fn has_where(upper: &str) -> bool {
+    upper
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|tok| tok == "WHERE")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +312,26 @@ mod tests {
     fn delete_statement_by_pk() {
         let sql = build_delete(Driver::Postgres, "public", "users", &[("id", "9")]);
         assert_eq!(sql, "DELETE FROM \"public\".\"users\" WHERE \"id\" = '9'");
+    }
+
+    #[test]
+    fn dangerous_flags_unguarded_dml_and_ddl() {
+        assert!(dangerous_reason("DELETE FROM users").is_some());
+        assert!(dangerous_reason("delete from users").is_some());
+        assert!(dangerous_reason("UPDATE users SET active = 0").is_some());
+        assert!(dangerous_reason("DROP TABLE users").is_some());
+        assert!(dangerous_reason("TRUNCATE users").is_some());
+        assert!(dangerous_reason("ALTER TABLE users ADD COLUMN x INT").is_some());
+        assert!(dangerous_reason("CREATE TABLE t (id INT)").is_some());
+    }
+
+    #[test]
+    fn dangerous_allows_guarded_dml_and_reads() {
+        assert!(dangerous_reason("DELETE FROM users WHERE id = 1").is_none());
+        assert!(dangerous_reason("UPDATE users SET active = 0 WHERE id = 1").is_none());
+        assert!(dangerous_reason("SELECT * FROM users").is_none());
+        assert!(dangerous_reason("INSERT INTO users (id) VALUES (1)").is_none());
+        // `WHERE` must be a whole word, not a prefix of an identifier.
+        assert!(dangerous_reason("UPDATE wherehouse SET x = 1 WHERE id = 2").is_none());
     }
 }
