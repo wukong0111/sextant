@@ -4,11 +4,13 @@ use std::path::Path;
 
 use sextant_core::{Connection, SextantError};
 
+mod keymap;
 mod parser;
 mod paths;
 mod theme;
 mod validation;
 
+pub use keymap::{RawBinding, load_keybindings, load_keybindings_from};
 pub use theme::{Theme, load_theme, load_theme_from};
 
 /// Load connections from the default XDG configuration path

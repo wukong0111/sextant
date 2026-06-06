@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use ratatui::crossterm::{
     ExecutableCommand,
-    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{Event, KeyCode, KeyEvent, KeyEventKind},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
@@ -19,6 +19,9 @@ use sextant_core::QueryExecutor;
 use tokio::sync::mpsc::UnboundedSender;
 
 mod autocomplete;
+
+mod keymap;
+use keymap::{Action, ChordState, KeySpec, Keymap};
 
 mod palette;
 use palette::Palette;
@@ -162,10 +165,10 @@ pub struct App {
     executors: std::collections::HashMap<String, sextant_db::SqlxExecutor>,
     editor_open: bool,
     editor: EditorModal,
-    pending_leader: bool,
-    pending_g: bool,
-    /// Pending `d` of a `dd` (delete-row) chord in the grid.
-    pending_d: bool,
+    /// Remappable Normal-mode bindings (defaults + `keys.toml`).
+    keymap: Keymap,
+    /// In-progress key chord for multi-key bindings (`gg`, `<Space>e`, …).
+    chord: ChordState,
     /// Pending grid-commit statements awaiting confirmation.
     pending_commit: Option<Vec<String>>,
     /// SQL used for the current browse, replayed to refresh after a commit.
@@ -221,6 +224,8 @@ impl App {
         let mut result_grid = ResultGrid::new();
         result_grid.set_palette(palette);
 
+        let keymap = Keymap::with_user_bindings(&sextant_config::load_keybindings());
+
         Ok(Self {
             mode: Mode::Normal,
             connection_name: None,
@@ -230,9 +235,8 @@ impl App {
             executors: std::collections::HashMap::new(),
             editor_open: false,
             editor,
-            pending_leader: false,
-            pending_g: false,
-            pending_d: false,
+            keymap,
+            chord: ChordState::default(),
             pending_commit: None,
             last_browse_sql: None,
             save_prompt: None,
@@ -539,154 +543,94 @@ impl App {
             return;
         }
 
-        // `dd` chord state for row deletion (reset unless this key is `d`).
-        let d_pending = self.pending_d;
-        self.pending_d = false;
+        // Resolve the key through the remappable keymap; a completed chord
+        // yields an Action dispatched against the current focus.
+        let spec = KeySpec::from_event(key);
+        if let Some(action) = self.chord.feed(&self.keymap, spec) {
+            self.dispatch(action, tx);
+        }
+    }
 
-        match key.code {
-            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+    /// Execute a resolved keymap [`Action`] against the current focus/state.
+    fn dispatch(&mut self, action: Action, tx: &UnboundedSender<AppMsg>) {
+        match action {
+            Action::Quit => {
                 if self.editor.any_dirty() {
                     self.quit_prompt = true;
                 } else {
                     self.should_quit = true;
                 }
             }
-            KeyCode::Tab => {
+            Action::FocusNext => {
                 self.focus = match self.focus {
                     Focus::Tree => Focus::Grid,
                     Focus::Grid => Focus::Tree,
                 };
-                self.pending_leader = false;
-                self.pending_g = false;
             }
-            KeyCode::Char('h') if self.pending_leader => {
-                self.open_history(tx);
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('r') if self.pending_leader => {
-                self.open_recent_files(tx);
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('x') if self.pending_leader => {
-                self.open_export_menu();
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('i') if self.pending_leader => {
-                self.start_import();
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('j') if key.modifiers.is_empty() => {
-                match self.focus {
-                    Focus::Tree => self.tree.next(),
-                    Focus::Grid => self.result_grid.move_down(),
-                }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('k') if key.modifiers.is_empty() => {
-                match self.focus {
-                    Focus::Tree => self.tree.prev(),
-                    Focus::Grid => self.result_grid.move_up(),
-                }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('h') if key.modifiers.is_empty() => {
-                match self.focus {
-                    Focus::Tree => self.handle_tree_left(),
-                    Focus::Grid => self.result_grid.move_left(),
-                }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('l') if key.modifiers.is_empty() => {
-                match self.focus {
-                    Focus::Tree => self.handle_tree_right(tx),
-                    Focus::Grid => self.result_grid.move_right(),
-                }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('g') if key.modifiers.is_empty() => {
+            Action::ToggleEditor => self.open_editor(),
+            Action::OpenHistory => self.open_history(tx),
+            Action::OpenRecent => self.open_recent_files(tx),
+            Action::Export => self.open_export_menu(),
+            Action::Import => self.start_import(),
+            Action::Down => match self.focus {
+                Focus::Tree => self.tree.next(),
+                Focus::Grid => self.result_grid.move_down(),
+            },
+            Action::Up => match self.focus {
+                Focus::Tree => self.tree.prev(),
+                Focus::Grid => self.result_grid.move_up(),
+            },
+            Action::Left => match self.focus {
+                Focus::Tree => self.handle_tree_left(),
+                Focus::Grid => self.result_grid.move_left(),
+            },
+            Action::Right => match self.focus {
+                Focus::Tree => self.handle_tree_right(tx),
+                Focus::Grid => self.result_grid.move_right(),
+            },
+            Action::Top => {
                 if self.focus == Focus::Grid {
-                    if self.pending_g {
-                        self.result_grid.top();
-                        self.pending_g = false;
-                    } else {
-                        self.pending_g = true;
-                    }
+                    self.result_grid.top();
                 }
-                self.pending_leader = false;
             }
-            KeyCode::Char('G') if key.modifiers.is_empty() => {
+            Action::Bottom => {
                 if self.focus == Focus::Grid {
                     self.result_grid.bottom();
                 }
-                self.pending_leader = false;
-                self.pending_g = false;
             }
-            KeyCode::Enter => {
-                match self.focus {
-                    Focus::Tree => self.handle_enter(tx),
-                    Focus::Grid => {
-                        self.result_grid.begin_edit();
-                        if self.result_grid.is_editing() {
-                            self.mode = Mode::Insert;
-                        }
+            Action::Activate => match self.focus {
+                Focus::Tree => self.handle_enter(tx),
+                Focus::Grid => {
+                    self.result_grid.begin_edit();
+                    if self.result_grid.is_editing() {
+                        self.mode = Mode::Insert;
                     }
                 }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('o') if key.modifiers.is_empty() && self.focus == Focus::Grid => {
-                self.result_grid.add_row();
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('d') if key.modifiers.is_empty() && self.focus == Focus::Grid => {
-                if d_pending {
-                    self.result_grid.mark_delete();
-                } else {
-                    self.pending_d = true;
+            },
+            Action::AddRow => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.add_row();
                 }
-                self.pending_leader = false;
-                self.pending_g = false;
             }
-            KeyCode::Char('z')
-                if key.modifiers.contains(KeyModifiers::CONTROL) && self.focus == Focus::Grid =>
-            {
-                self.result_grid.discard_changes();
-                self.pending_leader = false;
-                self.pending_g = false;
+            Action::DeleteRow => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.mark_delete();
+                }
             }
-            KeyCode::Char('s')
-                if key.modifiers.contains(KeyModifiers::CONTROL) && self.focus == Focus::Grid =>
-            {
-                self.begin_commit();
-                self.pending_leader = false;
-                self.pending_g = false;
+            Action::Commit => {
+                if self.focus == Focus::Grid {
+                    self.begin_commit();
+                }
             }
-            KeyCode::Char(' ') => {
-                self.pending_leader = true;
-                self.pending_g = false;
+            Action::Discard => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.discard_changes();
+                }
             }
-            KeyCode::Char('e') if self.pending_leader => {
-                self.open_editor();
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('D') if key.modifiers.is_empty() && self.focus == Focus::Tree => {
-                self.emit_table_ddl();
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            _ => {
-                self.pending_leader = false;
-                self.pending_g = false;
+            Action::EmitDdl => {
+                if self.focus == Focus::Tree {
+                    self.emit_table_ddl();
+                }
             }
         }
     }
@@ -2009,6 +1953,7 @@ fn render_quit_prompt(frame: &mut Frame, area: Rect, p: Palette) {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::KeyModifiers;
     use ratatui::style::Color;
 
     fn test_app() -> App {
