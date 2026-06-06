@@ -235,6 +235,8 @@ Like Helix: **select first, then act**. `w` selects the next word; `d` deletes t
 | `<Space>e` | Toggle SQL editor modal |
 | `<Space>o` | Open `.sql` file (fuzzy finder over queries dir) |
 | `<Space>r` | Recent files for active connection |
+| `<Space>h` | Query history picker |
+| `<Space>x` | Export current result set (CSV / JSON / SQL) |
 | `<Space>f` | Fuzzy-find tables / columns |
 | `<Space>w` | Switch connection |
 | `<Space>:` | Command palette |

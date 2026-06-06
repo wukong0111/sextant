@@ -68,6 +68,8 @@ pub enum AppMsg {
     HistoryLoaded(Vec<sextant_state::HistoryEntry>),
     /// Recent files loaded from the state store (for the recent-files picker).
     RecentFilesLoaded(Vec<sextant_state::FileEntry>),
+    /// An export finished: the written path, or an error message.
+    ExportFinished(Result<std::path::PathBuf, String>),
     /// Quit the application.
     Quit,
 }
@@ -91,6 +93,8 @@ enum PickerAction {
     LoadSql(String),
     /// Read a `.sql` file from disk and load it into the editor.
     OpenFile(std::path::PathBuf),
+    /// Export the current result set in the chosen format.
+    Export(sextant_db::ExportFormat),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +152,8 @@ pub struct App {
     >,
     last_result: Option<sextant_core::QueryResult>,
     last_error: Option<String>,
+    /// Transient success notice shown in the status line (e.g. export path).
+    last_notice: Option<String>,
     last_query_duration: Option<Duration>,
     query_start: Option<Instant>,
     focus: Focus,
@@ -186,6 +192,7 @@ impl App {
             table_meta: std::collections::HashMap::new(),
             last_result: None,
             last_error: None,
+            last_notice: None,
             last_query_duration: None,
             query_start: None,
             focus: Focus::Tree,
@@ -261,6 +268,8 @@ impl App {
 
         let error_span = if let Some(ref err) = self.last_error {
             Span::styled(format!(" ERR: {} │ ", err), Style::default().fg(Color::Red))
+        } else if let Some(ref notice) = self.last_notice {
+            Span::styled(format!(" {} │ ", notice), Style::default().fg(Color::Green))
         } else {
             Span::raw("")
         };
@@ -301,7 +310,7 @@ impl App {
         } else if self.focus == Focus::Grid && self.result_grid.is_editable() {
             " <Enter> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
         } else {
-            " <Space>e editor │ <Space>h history │ <Space>r recent │ <C-q> quit "
+            " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <C-q> quit "
         };
         let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
@@ -361,7 +370,7 @@ impl App {
             match key.code {
                 KeyCode::Char('j') | KeyCode::Down => self.picker_move(1),
                 KeyCode::Char('k') | KeyCode::Up => self.picker_move(-1),
-                KeyCode::Enter => self.picker_select(),
+                KeyCode::Enter => self.picker_select(tx),
                 KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
                 _ => {}
             }
@@ -426,6 +435,11 @@ impl App {
             }
             KeyCode::Char('r') if self.pending_leader => {
                 self.open_recent_files(tx);
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('x') if self.pending_leader => {
+                self.open_export_menu();
                 self.pending_leader = false;
                 self.pending_g = false;
             }
@@ -757,6 +771,7 @@ impl App {
                 let rows = result.rows.len();
                 self.last_result = Some(result);
                 self.last_error = None;
+                self.last_notice = None;
                 self.last_query_duration = self.query_start.take().map(|t| t.elapsed());
                 tracing::info!("query returned {} rows", rows);
             }
@@ -846,6 +861,15 @@ impl App {
                     items,
                     selected: 0,
                 });
+            }
+            AppMsg::ExportFinished(Ok(path)) => {
+                tracing::info!("exported to {}", path.display());
+                self.last_error = None;
+                self.last_notice = Some(format!("exported → {}", path.display()));
+            }
+            AppMsg::ExportFinished(Err(error)) => {
+                tracing::warn!("export error: {}", error);
+                self.last_error = Some(format!("export failed: {error}"));
             }
             AppMsg::Quit => {
                 self.should_quit = true;
@@ -1027,6 +1051,73 @@ impl App {
         });
     }
 
+    /// Open the export-format picker for the current result set.
+    fn open_export_menu(&mut self) {
+        if self.last_result.is_none() {
+            self.last_error = Some("nothing to export".into());
+            return;
+        }
+        let items = [
+            sextant_db::ExportFormat::Csv,
+            sextant_db::ExportFormat::Json,
+            sextant_db::ExportFormat::Sql,
+        ]
+        .into_iter()
+        .map(|f| PickerItem {
+            label: f.label().to_string(),
+            action: PickerAction::Export(f),
+        })
+        .collect();
+        self.picker = Some(Picker {
+            title: "Export as".into(),
+            items,
+            selected: 0,
+        });
+    }
+
+    /// Serialize the current result set in `format` and write it to a
+    /// timestamped file under the exports directory (async; reports back via
+    /// [`AppMsg::ExportFinished`]).
+    fn run_export(&mut self, format: sextant_db::ExportFormat, tx: &UnboundedSender<AppMsg>) {
+        let Some(result) = self.last_result.clone() else {
+            return;
+        };
+        // SQL export needs a target table name and dialect; fall back to a
+        // generic name for ad-hoc query results that aren't a single table.
+        let driver = self
+            .connection_name
+            .as_deref()
+            .and_then(|c| self.driver_for(c))
+            .unwrap_or(sextant_core::Driver::Postgres);
+        let table = self
+            .result_grid
+            .edit_context()
+            .map(|c| c.table.clone())
+            .unwrap_or_else(|| "exported_data".to_string());
+
+        let stem = self
+            .result_grid
+            .edit_context()
+            .map(|c| c.table.clone())
+            .unwrap_or_else(|| "export".to_string());
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = sextant_config::exports_dir()
+            .join(format!("{stem}-{millis}.{ext}", ext = format.extension()));
+
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let content = sextant_db::export::export(&result, format, driver, &table);
+            let msg = match sextant_config::write_export(&path, &content) {
+                Ok(()) => AppMsg::ExportFinished(Ok(path)),
+                Err(e) => AppMsg::ExportFinished(Err(e.to_string())),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
     /// Move the picker selection by `delta`, wrapping around.
     fn picker_move(&mut self, delta: isize) {
         if let Some(p) = self.picker.as_mut() {
@@ -1039,7 +1130,7 @@ impl App {
     }
 
     /// Act on the highlighted picker entry, then dismiss the picker.
-    fn picker_select(&mut self) {
+    fn picker_select(&mut self, tx: &UnboundedSender<AppMsg>) {
         let Some(picker) = self.picker.take() else {
             return;
         };
@@ -1055,6 +1146,7 @@ impl App {
                 Ok(content) => self.load_into_editor(&content, Some(path)),
                 Err(e) => self.last_error = Some(format!("open failed: {e}")),
             },
+            PickerAction::Export(format) => self.run_export(format, tx),
         }
     }
 

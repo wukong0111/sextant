@@ -83,3 +83,53 @@ fn editor_query_is_recorded_in_history() {
         .unwrap();
     assert_eq!(count, 1, "the executed query must be recorded in history");
 }
+
+#[test]
+fn exports_result_set_to_csv_file() {
+    let fx = Fixture::sqlite("e2e-export");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-export", Duration::from_secs(10));
+
+    // Connect and run a query that returns the seeded rows.
+    tui.send(ENTER);
+    tui.wait_for("users", Duration::from_secs(15));
+    tui.leader("e");
+    tui.wait_for("insert", Duration::from_secs(10));
+    tui.type_str("i");
+    tui.type_str("SELECT id, name FROM users");
+    tui.wait_for("SELECT id, name FROM users", Duration::from_secs(10));
+    tui.esc();
+    tui.wait_for("<C-e> run", Duration::from_secs(10));
+    tui.send(CTRL_E);
+    tui.wait_for("rows", Duration::from_secs(10));
+    tui.esc(); // close the editor modal
+    tui.wait_for("export", Duration::from_secs(10)); // main status hint
+
+    // Open the export menu (<Space>x), pick the first format (CSV) with Enter.
+    tui.leader("x");
+    tui.wait_for("Export as", Duration::from_secs(10));
+    tui.wait_for("CSV", Duration::from_secs(10));
+    tui.send(ENTER);
+    tui.wait_for("exported", Duration::from_secs(10)); // success notice
+
+    // Quit (the dirty editor buffer triggers the prompt; `d` discards).
+    tui.send(CTRL_Q);
+    tui.wait_for("Unsaved buffers", Duration::from_secs(10));
+    tui.type_str("d");
+    assert!(
+        tui.wait_exit(Duration::from_secs(10)),
+        "sextant should exit"
+    );
+
+    // Cross-check the backend: a CSV file was written with the seeded data.
+    let dir = fx.exports_dir();
+    let csv = std::fs::read_dir(&dir)
+        .expect("exports dir should exist")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .find(|p| p.extension().is_some_and(|x| x == "csv"))
+        .expect("a .csv export should have been written");
+    let contents = std::fs::read_to_string(&csv).unwrap();
+    assert!(contents.starts_with("id,name\n"), "CSV needs a header row");
+    assert!(contents.contains("1,alice"), "CSV must contain the rows");
+    assert!(contents.contains("2,bob"));
+}

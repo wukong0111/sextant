@@ -52,6 +52,11 @@ pub fn queries_dir() -> std::path::PathBuf {
     paths::queries_dir()
 }
 
+/// Return the directory where exported result sets are written.
+pub fn exports_dir() -> std::path::PathBuf {
+    paths::exports_dir()
+}
+
 /// Resolve a query name to a `.sql` path inside [`queries_dir`].
 pub fn query_path(name: &str) -> std::path::PathBuf {
     paths::query_path(name)
@@ -68,6 +73,22 @@ pub fn state_db_path() -> std::path::PathBuf {
 /// queries directory is `0700` and the `.sql` file is `0600` (query text on
 /// disk is not encrypted; the threat model assumes local-machine access only).
 pub fn write_query(path: &Path, content: &str) -> Result<(), SextantError> {
+    write_secure(path, content)
+}
+
+/// Write an exported result set to `path`, creating the parent directory if
+/// needed.
+///
+/// Enforces the same restrictive permissions as [`write_query`] (`0700`
+/// directory, `0600` file): exported data on disk is not encrypted, and the
+/// threat model assumes local-machine access only.
+pub fn write_export(path: &Path, content: &str) -> Result<(), SextantError> {
+    write_secure(path, content)
+}
+
+/// Write `content` to `path` with restrictive Unix permissions: the parent
+/// directory is `0700` and the file itself is `0600`.
+fn write_secure(path: &Path, content: &str) -> Result<(), SextantError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
         set_mode(parent, 0o700);

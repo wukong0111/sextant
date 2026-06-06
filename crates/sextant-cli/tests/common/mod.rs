@@ -193,6 +193,11 @@ impl Fixture {
         self.home().join("data").join("sextant").join("state.db")
     }
 
+    /// Path to the directory where exported result sets are written.
+    pub fn exports_dir(&self) -> std::path::PathBuf {
+        self.home().join("data").join("sextant").join("exports")
+    }
+
     /// Spawn the binary against this environment.
     pub fn spawn(&self) -> Tui {
         Tui::spawn(self.home())

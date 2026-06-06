@@ -218,16 +218,33 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 
 ### 3.1 Export / Import (`sextant-db` + `sextant-ui`)
 
-- **Export**:
-  - CSV (`csv` crate, RFC 4180, delimiter configurable).
-  - JSON (`serde_json`, array de objetos; opción NDJSON).
-  - SQL dump (`INSERT` statements; schema-only / data-only opcional).
-  - Trigger: comando `:export` o keybinding desde grid.
-  - Async con barra de progreso (para tablas grandes).
-- **Import**:
+> **Base compartida**: módulo puro `sextant-db::export` (`ExportFormat` +
+> `to_csv`/`to_json`/`to_sql`), sin I/O, sobre el `QueryResult` en memoria.
+> Reutiliza `sql::quote_ident` para el dump SQL (literales type-aware: números y
+> booleanos sin comillas, NULL desnudo, hex para `Bytes`). El destino se escribe
+> en `sextant-config::exports_dir()` (`$XDG_DATA_HOME/sextant/exports`) con
+> permisos `0700`/`0600` vía `write_export`.
+
+- **Export** ✅:
+  - [x] ✅ CSV (`csv` crate, RFC 4180; NULL → campo vacío).
+  - [x] ✅ JSON (`serde_json`, array de objetos por fila, valores tipados).
+  - [x] ✅ SQL dump (`INSERT` statements por fila, identificadores por dialecto).
+  - [x] ✅ Trigger: `<Space>x` → picker de formato (CSV/JSON/SQL); export
+    asíncrono (`tokio::spawn`), ruta confirmada en la status line.
+  - [ ] ⬜ Delimitador CSV configurable / NDJSON / schema-only — diferido.
+  - [ ] ⬜ Barra de progreso (results en memoria ≤500–1000 filas; no crítico).
+- **Import** ⬜ (tarea siguiente):
   - CSV/JSON/SQL → preview de mapeo de columnas.
   - Validar tipos antes de importar.
   - Async con progreso.
+
+> **Divergencias respecto al plan original**:
+> - **`:export` → `<Space>x`.** Igual que en 3.2, la command-line `:` se difiere
+>   a la command-palette de 3.7; el export se dispara con la leader key
+>   `<Space>x` (consistente con `<Space>e`/`<Space>h`/`<Space>r`).
+> - **Export-first.** Export e import se separan en commits distintos por
+>   tamaño: el import necesita UI de preview de mapeo de columnas + validación
+>   de tipos. Este commit cubre solo export.
 
 ### 3.2 Query History + Snippets ✅ (`d88ddc3`)
 

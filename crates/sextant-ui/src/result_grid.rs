@@ -86,6 +86,12 @@ impl ResultGrid {
         &self.result
     }
 
+    /// The table context backing this grid, if it was opened by browsing a
+    /// table (used to name the target table for SQL export).
+    pub fn edit_context(&self) -> Option<&EditContext> {
+        self.edit_ctx.as_ref()
+    }
+
     /// True when the grid can be edited (has context and a primary key).
     pub fn is_editable(&self) -> bool {
         self.edit_ctx

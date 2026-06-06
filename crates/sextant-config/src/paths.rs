@@ -24,6 +24,12 @@ pub fn queries_dir() -> PathBuf {
     data_dir().join("queries")
 }
 
+/// Returns the directory where exported result sets are written
+/// (`$XDG_DATA_HOME/sextant/exports` or `~/.local/share/sextant/exports`).
+pub fn exports_dir() -> PathBuf {
+    data_dir().join("exports")
+}
+
 /// Returns the sextant data directory
 /// (`$XDG_DATA_HOME/sextant` or `~/.local/share/sextant`).
 fn data_dir() -> PathBuf {

@@ -2,12 +2,14 @@
 
 pub mod connection_manager;
 pub mod executor;
+pub mod export;
 pub mod introspection;
 pub mod sql;
 pub mod url_builder;
 
 pub use connection_manager::ConnectionManager;
 pub use executor::{DbPool, SqlxExecutor};
+pub use export::ExportFormat;
 pub use sql::{
     build_delete, build_insert, build_update, generate_create_table, qualified_table, quote_ident,
     to_sql_literal,
