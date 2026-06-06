@@ -51,6 +51,7 @@ tasks; their results return as `AppMsg` variants over an
 | Schema/table introspection | `crates/sextant-db/src/introspection.rs` |
 | Connection-URL construction per driver | `crates/sextant-db/src/url_builder.rs` |
 | Config load / validation / XDG paths / password lookup | `crates/sextant-config/src/{lib,parser,validation,paths}.rs` |
+| Local `state.db` (query history, recent-files ring) | `crates/sextant-state/src/lib.rs` |
 | Domain types & `QueryExecutor` trait | `crates/sextant-core/src/lib.rs` |
 
 Public DB surface is re-exported from `sextant-db/src/lib.rs`:

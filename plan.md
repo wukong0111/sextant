@@ -13,7 +13,7 @@
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
 | Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `4a2636e` (fix SQLite BOOLEAN) |
 | Fase 2 — v0.2 | ✅ Completada | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup), `76858c7` (chore: normalización fmt/clippy toolchain 1.96), `2de33b5` (base: introspección de columnas + PK + cache), `c826b0c` (base: quote_ident + DDL `CREATE TABLE`), `b8bc78f` (2.4 columnas en árbol + browse rows + DDL), `95b4427` (2.3 autocomplete), `aa662b0` (2.2 base: transacciones + DML gen), `4d7bfac` (2.2 grid editable CRUD), `bf1a892` (2.5 multi-buffer tabs), `f0c5232` (2.4 índices/FKs en árbol), `b7e6148` (2.5 guardado .sql + prompt al salir) |
-| Fase 3 — v1 | ⬜ Pendiente | — |
+| Fase 3 — v1 | 🚧 En progreso | `d88ddc3` (3.2 query history + recent files) |
 
 ## Principios Directores
 
@@ -229,14 +229,30 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   - Validar tipos antes de importar.
   - Async con progreso.
 
-### 3.2 Query History + Snippets
+### 3.2 Query History + Snippets ✅ (`d88ddc3`)
 
-- `state.db` (SQLite local) en `~/.local/share/sextant/state.db`.
-- Tablas:
-  - `query_history` (timestamp, connection, sql, duration_ms, error_msg).
-  - `recent_files` (connection, path, last_opened; ring de 20).
-- Comando `:history` → popup con lista ejecutable (Enter para cargar al editor).
-- Recent files: `<Space>r` para popup por conexión.
+> **Crate nuevo** `sextant-state`: dueño de la persistencia local de la app
+> (`state.db`), separada de las BD del usuario. `StateStore` (sqlx/sqlite,
+> async, `Clone` barato) con migración idempotente al abrir. El path vive en
+> `sextant-config::state_db_path()` junto al resto de paths XDG. Permisos
+> `0700` (dir) / `0600` (fichero).
+
+- [x] ✅ `state.db` (SQLite local) en `~/.local/share/sextant/state.db`.
+- [x] ✅ Tablas:
+  - [x] ✅ `query_history` (timestamp, connection, sql, duration_ms, error_msg).
+  - [x] ✅ `recent_files` (connection, path, last_opened; ring de 20 por conexión, prune en cada insert).
+- [x] ✅ Historial: popup con lista ejecutable (Enter carga el SQL al editor).
+- [x] ✅ Recent files: `<Space>r` popup por conexión (Enter lee el `.sql` y lo carga al editor).
+- [ ] ⬜ **Snippets** — diferido (fuera del alcance de este commit; a planificar dentro de la Fase 3).
+
+> **Divergencias respecto al plan original**:
+> - **`:history` → `<Space>h`.** La línea de comando `:` se difiere a la
+>   command-palette de 3.7 para no introducir un input `:` a medias que esa
+>   tarea reescribiría; el historial se dispara con la leader key `<Space>h`
+>   (consistente con `<Space>e`/`<Space>r`).
+> - **Grabación selectiva.** Sólo se registran las queries ejecutadas desde el
+>   editor; el browse de tablas y el refresco post-commit pasan `record=false`
+>   para no ensuciar el historial.
 
 ### 3.3 Transacciones (Hybrid psql-style)
 

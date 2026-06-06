@@ -41,6 +41,7 @@ sextant/
     ├── sextant-core/          # domain types, traits, shared errors
     ├── sextant-config/        # TOML config loading, XDG paths, keymaps
     ├── sextant-db/            # sqlx drivers, query execution, introspection
+    ├── sextant-state/         # local state.db (query history, recent files)
     └── sextant-ui/            # ratatui components, event loop, layout
 ```
 
@@ -50,6 +51,7 @@ sextant/
 - **`sextant-core`** — Domain primitives (`Driver`, `Connection`, `CellValue`, `QueryResult`, etc.) and the `QueryExecutor` trait. Kept lightweight with few dependencies.
 - **`sextant-config`** — Loads `connections.toml`, `config.toml`, and `keys.toml` from XDG-compliant paths (`~/.config/sextant/`). Validates per-driver required fields.
 - **`sextant-db`** — Implements `QueryExecutor` via `sqlx`. Manages per-connection connection pools. All DB I/O is async (`tokio`).
+- **`sextant-state`** — Owns the app's private local database (`state.db`): query history and recent-files ring. Async (`sqlx`/SQLite), independent of the user's connections.
 - **`sextant-ui`** — Owns the TUI event loop, state machine (`Normal` / `Insert` / `EditorOpen`), and all `ratatui` widgets (tree sidebar, result grid, editor modal, status line).
 
 ### Dependency Rules
@@ -58,7 +60,8 @@ sextant/
 - `sextant-ui` → `sextant-core`
 - `sextant-db` → `sextant-core`
 - `sextant-config` → `sextant-core`
-- Service crates (`sextant-db`, `sextant-config`) must compile and be testable without depending on `sextant-ui`.
+- `sextant-state` → `sextant-core`
+- Service crates (`sextant-db`, `sextant-config`, `sextant-state`) must compile and be testable without depending on `sextant-ui`.
 
 ---
 
