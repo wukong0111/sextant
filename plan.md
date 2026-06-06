@@ -13,7 +13,7 @@
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
 | Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `4a2636e` (fix SQLite BOOLEAN) |
 | Fase 2 — v0.2 | ✅ Completada | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup), `76858c7` (chore: normalización fmt/clippy toolchain 1.96), `2de33b5` (base: introspección de columnas + PK + cache), `c826b0c` (base: quote_ident + DDL `CREATE TABLE`), `b8bc78f` (2.4 columnas en árbol + browse rows + DDL), `95b4427` (2.3 autocomplete), `aa662b0` (2.2 base: transacciones + DML gen), `4d7bfac` (2.2 grid editable CRUD), `bf1a892` (2.5 multi-buffer tabs), `f0c5232` (2.4 índices/FKs en árbol), `b7e6148` (2.5 guardado .sql + prompt al salir) |
-| Fase 3 — v1 | 🚧 En progreso | `d88ddc3` (3.2 query history + recent files), `96eea9f` (3.1 export CSV/JSON/SQL), `49a6871` (3.1 import core), `1111aeb` (3.1 import UI), `2a8a1e6` (3.3 transacciones + guard destructivo) |
+| Fase 3 — v1 | 🚧 En progreso | `d88ddc3` (3.2 query history + recent files), `96eea9f` (3.1 export CSV/JSON/SQL), `49a6871` (3.1 import core), `1111aeb` (3.1 import UI), `2a8a1e6` (3.3 transacciones + guard destructivo), `6468283` (3.4 themes), `23228bf` (3.4 keymap) |
 
 ## Principios Directores
 
@@ -302,14 +302,29 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   marca `DELETE`/`UPDATE` sin `WHERE` y DDL (`DROP`/`TRUNCATE`/`ALTER`/`CREATE`/
   `RENAME`); el editor las pasa por un modal de confirmación antes de ejecutarlas.
 
-### 3.4 Keymap Remapeable + Themes
+### 3.4 Keymap Remapeable + Themes ✅ (`6468283` themes, `23228bf` keymap)
 
-- Cargar `keys.toml` desde `~/.config/sextant/keys.toml`.
-- Estructura: `[[binding]] mode = "normal" keys = "<Space>e" action = "toggle_editor"`.
-- Defaults hardcodeados + merge con user overrides.
-- Themes: `dark` y `light` built-in; custom `.toml` en `themes_dir`.
-- `Theme` struct con colores para cada rol (background, foreground, accent, error, etc.).
-- Aplicar a todos los componentes.
+- [x] ✅ Cargar `keys.toml` desde `~/.config/sextant/keys.toml`
+  (`sextant-config::load_keybindings`).
+- [x] ✅ Estructura: `[[binding]] keys = "<Space>e" action = "toggle_editor"`.
+  **Divergencia**: sin campo `mode` — el keymap cubre el contexto Normal (árbol +
+  grid); las teclas internas del editor y de los modales se manejan donde se
+  capturan. Las acciones se despachan según el `Focus` actual (p.ej. `down` mueve
+  el árbol o el cursor del grid).
+- [x] ✅ Defaults hardcodeados (`Keymap::defaults`, reproducen las bindings
+  previas) + merge con user overrides (un chord de usuario reemplaza el default
+  con el mismo chord o añade uno alternativo; nombres de acción desconocidos se
+  ignoran). Resolver de chords (`ChordState`) para secuencias de 1–2 teclas
+  (`gg`, `dd`, `<Space>x`) con recuperación de prefijos muertos.
+- [x] ✅ Themes: `dark` y `light` built-in; custom `<name>.toml` en `themes_dir`
+  (`~/.config/sextant/themes`); overrides por rol inline en `config.toml`
+  `[theme]`.
+- [x] ✅ `Theme` struct (en `sextant-config`, tokens de color como strings para no
+  depender de `ratatui`) con roles: background, foreground, accent, accent_alt,
+  error, success, muted, selection_fg, selection_bg.
+- [x] ✅ Aplicado a todos los componentes: `sextant-ui` resuelve el `Theme` a un
+  `Palette` de colores `ratatui` una vez al arranque y lo propaga al árbol, grid,
+  editor y todos los modales. El tema dark por defecto reproduce el aspecto previo.
 
 ### 3.5 Swap Files + Recovery
 
