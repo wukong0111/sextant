@@ -9,10 +9,22 @@ export SEXTANT_DOCKER_MYSQL_PASSWORD ?= sextant
 export SEXTANT_TEST_PG_URL ?= postgres://sextant:sextant@localhost:5433/sextant_test
 export SEXTANT_TEST_MYSQL_URL ?= mysql://sextant:sextant@localhost:3307/sextant_test
 
-.PHONY: test-db-up test-db-down test-integration test-db seed seed-sqlite help
+.PHONY: test-db-up test-db-down test-integration test-db seed seed-sqlite help check e2e smoke
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+check: ## Full verification: compile, test, fmt check, clippy
+	cargo check --workspace
+	cargo test --workspace
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets
+
+e2e: ## Run the PTY end-to-end tests (no Docker needed; SQLite only)
+	cargo test -p sextant-cli --test e2e
+
+smoke: ## Print live "screenshots" of the running TUI (manual, no TTY needed)
+	cargo test -p sextant-cli --test smoke -- --ignored --nocapture
 
 test-db-up: ## Start PostgreSQL and MySQL test containers
 	$(DOCKER_COMPOSE) up -d
