@@ -70,6 +70,8 @@ pub enum AppMsg {
     RecentFilesLoaded(Vec<sextant_state::FileEntry>),
     /// An export finished: the written path, or an error message.
     ExportFinished(Result<std::path::PathBuf, String>),
+    /// An import finished: rows affected, or an error message.
+    ImportFinished(Result<u64, String>),
     /// Quit the application.
     Quit,
 }
@@ -95,6 +97,25 @@ enum PickerAction {
     OpenFile(std::path::PathBuf),
     /// Export the current result set in the chosen format.
     Export(sextant_db::ExportFormat),
+}
+
+/// An import in progress: the chosen target table and the file path being typed.
+struct ImportPrompt {
+    conn: String,
+    schema: String,
+    table: String,
+    driver: sextant_core::Driver,
+    path: String,
+}
+
+/// A parsed import awaiting confirmation in a modal.
+struct PendingImport {
+    /// Connection whose executor runs the statements.
+    conn: String,
+    /// Human-readable summary lines for the confirm modal.
+    summary: Vec<String>,
+    /// Statements to run in a single transaction.
+    statements: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +165,10 @@ pub struct App {
     state_store: Option<sextant_state::StateStore>,
     /// Active modal list picker (history / recent files), if any.
     picker: Option<Picker>,
+    /// Active import file-path prompt, if any.
+    import_prompt: Option<ImportPrompt>,
+    /// Parsed import awaiting confirmation, if any.
+    pending_import: Option<PendingImport>,
     saved_buffers: std::collections::HashMap<String, String>,
     /// Column/PK metadata per connection, keyed by `(schema, table)`.
     table_meta: std::collections::HashMap<
@@ -188,6 +213,8 @@ impl App {
             quit_prompt: false,
             state_store: None,
             picker: None,
+            import_prompt: None,
+            pending_import: None,
             saved_buffers: std::collections::HashMap::new(),
             table_meta: std::collections::HashMap::new(),
             last_result: None,
@@ -247,6 +274,16 @@ impl App {
         // Modal list picker (history / recent files).
         if let Some(picker) = &self.picker {
             render_picker(frame, area, picker);
+        }
+
+        // Import file-path prompt.
+        if let Some(prompt) = &self.import_prompt {
+            render_import_prompt(frame, area, prompt);
+        }
+
+        // Import confirmation modal.
+        if let Some(pending) = &self.pending_import {
+            render_import_modal(frame, area, pending);
         }
 
         // Status line at the bottom.
@@ -310,7 +347,7 @@ impl App {
         } else if self.focus == Focus::Grid && self.result_grid.is_editable() {
             " <Enter> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
         } else {
-            " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <C-q> quit "
+            " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <Space>i import │ <C-q> quit "
         };
         let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
@@ -360,6 +397,36 @@ impl App {
                         self.should_quit = true;
                     }
                 }
+                _ => {}
+            }
+            return;
+        }
+
+        // Import file-path prompt swallows keys until confirmed/cancelled.
+        if self.import_prompt.is_some() {
+            match key.code {
+                KeyCode::Enter => self.confirm_import_prompt(),
+                KeyCode::Esc => self.import_prompt = None,
+                KeyCode::Backspace => {
+                    if let Some(p) = self.import_prompt.as_mut() {
+                        p.path.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(p) = self.import_prompt.as_mut() {
+                        p.path.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Import confirmation modal swallows keys until dismissed.
+        if self.pending_import.is_some() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') => self.confirm_import(tx),
+                KeyCode::Esc | KeyCode::Char('n') => self.pending_import = None,
                 _ => {}
             }
             return;
@@ -440,6 +507,11 @@ impl App {
             }
             KeyCode::Char('x') if self.pending_leader => {
                 self.open_export_menu();
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('i') if self.pending_leader => {
+                self.start_import();
                 self.pending_leader = false;
                 self.pending_g = false;
             }
@@ -871,6 +943,21 @@ impl App {
                 tracing::warn!("export error: {}", error);
                 self.last_error = Some(format!("export failed: {error}"));
             }
+            AppMsg::ImportFinished(Ok(affected)) => {
+                tracing::info!("import affected {affected} rows");
+                self.last_error = None;
+                self.last_notice = Some(format!("imported {affected} rows"));
+                // Refresh the current browse so imported rows appear.
+                if let (Some(name), Some(sql)) =
+                    (self.connection_name.clone(), self.last_browse_sql.clone())
+                {
+                    self.run_sql(&name, sql, tx, false);
+                }
+            }
+            AppMsg::ImportFinished(Err(error)) => {
+                tracing::warn!("import error: {}", error);
+                self.last_error = Some(format!("import failed: {error}"));
+            }
             AppMsg::Quit => {
                 self.should_quit = true;
             }
@@ -1113,6 +1200,148 @@ impl App {
             let msg = match sextant_config::write_export(&path, &content) {
                 Ok(()) => AppMsg::ExportFinished(Ok(path)),
                 Err(e) => AppMsg::ExportFinished(Err(e.to_string())),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// Begin importing into the table selected in the tree: open a file-path
+    /// prompt bound to that target.
+    fn start_import(&mut self) {
+        let Some(tree_pane::LineKind::Table {
+            conn,
+            schema,
+            table,
+        }) = self.tree.selected_kind()
+        else {
+            self.last_error = Some("select a table in the tree to import into".into());
+            return;
+        };
+        let conn_name = self.tree.connections[conn].name.clone();
+        let (Some(schema_name), Some(table_name), Some(driver)) = (
+            self.tree.schema_name(conn, schema),
+            self.tree.table_name(conn, schema, table),
+            self.driver_for(&conn_name),
+        ) else {
+            return;
+        };
+        self.import_prompt = Some(ImportPrompt {
+            conn: conn_name,
+            schema: schema_name,
+            table: table_name,
+            driver,
+            path: String::new(),
+        });
+    }
+
+    /// Read the prompted file, parse it by extension, and stage the resulting
+    /// statements for confirmation. Relative paths resolve under the exports
+    /// directory (symmetric with where exports are written).
+    fn confirm_import_prompt(&mut self) {
+        let Some(prompt) = self.import_prompt.take() else {
+            return;
+        };
+        let raw = std::path::PathBuf::from(prompt.path.trim());
+        let path = if raw.is_absolute() {
+            raw
+        } else {
+            sextant_config::exports_dir().join(raw)
+        };
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.last_error = Some(format!("import: cannot read {}: {e}", path.display()));
+                return;
+            }
+        };
+
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let (statements, summary) = match ext.as_str() {
+            "csv" | "json" => {
+                let parsed = if ext == "csv" {
+                    sextant_db::import::parse_csv(&content)
+                } else {
+                    sextant_db::import::parse_json(&content)
+                };
+                let data = match parsed {
+                    Ok(d) => d,
+                    Err(e) => {
+                        self.last_error = Some(format!("import: {e}"));
+                        return;
+                    }
+                };
+                let Some(meta) = self
+                    .table_meta
+                    .get(&prompt.conn)
+                    .and_then(|m| m.get(&(prompt.schema.clone(), prompt.table.clone())))
+                else {
+                    self.last_error =
+                        Some("import: no column metadata for the target table".into());
+                    return;
+                };
+                let preview = sextant_db::import::preview(&data, meta);
+                let statements = sextant_db::import::build_inserts(
+                    prompt.driver,
+                    &prompt.schema,
+                    &prompt.table,
+                    &data,
+                    &preview.mapping,
+                    meta,
+                );
+                if statements.is_empty() {
+                    self.last_error =
+                        Some("import: no source columns match the target table".into());
+                    return;
+                }
+                (statements, import_summary(&prompt.table, &preview))
+            }
+            "sql" => {
+                let statements = sextant_db::import::split_sql_statements(&content);
+                if statements.is_empty() {
+                    self.last_error = Some("import: the SQL file has no statements".into());
+                    return;
+                }
+                let summary = vec![format!(
+                    "Run {} SQL statement(s) as a script.",
+                    statements.len()
+                )];
+                (statements, summary)
+            }
+            _ => {
+                self.last_error =
+                    Some("import: unsupported file type (use .csv/.json/.sql)".into());
+                return;
+            }
+        };
+
+        self.pending_import = Some(PendingImport {
+            conn: prompt.conn,
+            summary,
+            statements,
+        });
+    }
+
+    /// Run the staged import statements in a transaction (async; reports back
+    /// via [`AppMsg::ImportFinished`]).
+    fn confirm_import(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(pending) = self.pending_import.take() else {
+            return;
+        };
+        let Some(executor) = self.executors.get(&pending.conn).cloned() else {
+            self.last_error = Some("import: not connected".into());
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let msg = match executor.execute_transaction(&pending.statements).await {
+                Ok(affected) => AppMsg::ImportFinished(Ok(affected)),
+                Err(e) => AppMsg::ImportFinished(Err(e.to_string())),
             };
             let _ = tx.send(msg);
         });
@@ -1484,6 +1713,64 @@ fn render_centered_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<
         ),
         rect,
     );
+}
+
+/// Build the read-only summary lines shown before a CSV/JSON import runs.
+fn import_summary(table: &str, preview: &sextant_db::ImportPreview) -> Vec<String> {
+    let mut lines = vec![format!(
+        "Insert {} row(s) into {}.",
+        preview.row_count, table
+    )];
+    let mapped: Vec<&str> = preview
+        .mapping
+        .pairs
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .collect();
+    lines.push(format!("Columns: {}", mapped.join(", ")));
+    if !preview.mapping.unmatched_source.is_empty() {
+        lines.push(format!(
+            "Ignored (no match): {}",
+            preview.mapping.unmatched_source.join(", ")
+        ));
+    }
+    if preview.type_issues > 0 {
+        lines.push(format!(
+            "⚠ {} value(s) may not match the column type",
+            preview.type_issues
+        ));
+    }
+    lines
+}
+
+/// Render the import file-path prompt.
+fn render_import_prompt(frame: &mut Frame, area: Rect, prompt: &ImportPrompt) {
+    render_centered_modal(
+        frame,
+        area,
+        &format!("Import into {}", prompt.table),
+        vec![
+            Line::from(format!("{}_", prompt.path)),
+            Line::from(Span::styled(
+                "path to .csv/.json/.sql (abs, or under exports dir) │ <Enter> load │ <Esc> cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
+    );
+}
+
+/// Render the import-confirmation modal listing the summary of what will run.
+fn render_import_modal(frame: &mut Frame, area: Rect, pending: &PendingImport) {
+    let mut lines: Vec<Line> = pending
+        .summary
+        .iter()
+        .map(|s| Line::from(Span::raw(s.clone())))
+        .collect();
+    lines.push(Line::from(Span::styled(
+        "<Enter>/y import   <Esc>/n cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    render_centered_modal(frame, area, "Confirm import", lines);
 }
 
 /// Render the Save-as filename prompt.

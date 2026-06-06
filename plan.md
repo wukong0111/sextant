@@ -233,18 +233,29 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
     asíncrono (`tokio::spawn`), ruta confirmada en la status line.
   - [ ] ⬜ Delimitador CSV configurable / NDJSON / schema-only — diferido.
   - [ ] ⬜ Barra de progreso (results en memoria ≤500–1000 filas; no crítico).
-- **Import** ⬜ (tarea siguiente):
-  - CSV/JSON/SQL → preview de mapeo de columnas.
-  - Validar tipos antes de importar.
-  - Async con progreso.
+- **Import** ✅:
+  - [x] ✅ CSV/JSON → tabla existente con **mapeo por nombre** (case-insensitive):
+    módulo puro `sextant-db::import` (`parse_csv`/`parse_json`/`match_columns`/
+    `preview`/`build_inserts`); las columnas sin emparejar se ignoran.
+  - [x] ✅ SQL → `split_sql_statements` (respeta `;` dentro de strings y `''`) y
+    se ejecuta como script en una transacción.
+  - [x] ✅ Preview read-only (`Confirm import` modal): nº de filas, columnas
+    mapeadas, columnas ignoradas, y warning con el nº de valores que no encajan
+    con el tipo destino (validación de tipos coarse por nombre de tipo).
+  - [x] ✅ Trigger: `<Space>i` sobre la tabla seleccionada en el árbol → prompt
+    de ruta (absoluta o relativa a `exports_dir`) → preview → confirmar →
+    `execute_transaction` (atómico; refresca el browse si lo había).
+  - [ ] ⬜ Remapeo interactivo de columnas / barra de progreso — diferido.
 
 > **Divergencias respecto al plan original**:
-> - **`:export` → `<Space>x`.** Igual que en 3.2, la command-line `:` se difiere
->   a la command-palette de 3.7; el export se dispara con la leader key
->   `<Space>x` (consistente con `<Space>e`/`<Space>h`/`<Space>r`).
-> - **Export-first.** Export e import se separan en commits distintos por
->   tamaño: el import necesita UI de preview de mapeo de columnas + validación
->   de tipos. Este commit cubre solo export.
+> - **`:export`/`:import` → `<Space>x`/`<Space>i`.** Igual que en 3.2, la
+>   command-line `:` se difiere a la command-palette de 3.7; export/import se
+>   disparan con leader keys (consistente con `<Space>e`/`<Space>h`/`<Space>r`).
+> - **Export-first, import después.** Se implementaron en commits separados por
+>   tamaño (export: `96eea9f`; import core + UI a continuación).
+> - **Mapeo por nombre, no interactivo.** El preview empareja columnas por
+>   nombre y es read-only (confirmar/cancelar); el remapeo interactivo y la barra
+>   de progreso (results en memoria, ≤500–1000 filas) quedan diferidos.
 
 ### 3.2 Query History + Snippets ✅ (`d88ddc3`)
 

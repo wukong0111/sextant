@@ -237,6 +237,7 @@ Like Helix: **select first, then act**. `w` selects the next word; `d` deletes t
 | `<Space>r` | Recent files for active connection |
 | `<Space>h` | Query history picker |
 | `<Space>x` | Export current result set (CSV / JSON / SQL) |
+| `<Space>i` | Import a file into the selected table (CSV / JSON / SQL) |
 | `<Space>f` | Fuzzy-find tables / columns |
 | `<Space>w` | Switch connection |
 | `<Space>:` | Command palette |
