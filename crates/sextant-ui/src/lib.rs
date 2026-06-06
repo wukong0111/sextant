@@ -64,8 +64,33 @@ pub enum AppMsg {
     ToggleEditor,
     /// A key event targeted at the editor.
     EditorKey(KeyEvent),
+    /// Query history loaded from the state store (for the history picker).
+    HistoryLoaded(Vec<sextant_state::HistoryEntry>),
+    /// Recent files loaded from the state store (for the recent-files picker).
+    RecentFilesLoaded(Vec<sextant_state::FileEntry>),
     /// Quit the application.
     Quit,
+}
+
+/// A modal list picker (query history or recent files).
+struct Picker {
+    title: String,
+    items: Vec<PickerItem>,
+    selected: usize,
+}
+
+/// A single selectable row in a [`Picker`].
+struct PickerItem {
+    label: String,
+    action: PickerAction,
+}
+
+/// What selecting a [`PickerItem`] does.
+enum PickerAction {
+    /// Load SQL text into the editor.
+    LoadSql(String),
+    /// Read a `.sql` file from disk and load it into the editor.
+    OpenFile(std::path::PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +136,10 @@ pub struct App {
     save_prompt: Option<String>,
     /// Whether the quit-with-unsaved-buffers prompt is showing.
     quit_prompt: bool,
+    /// Local state store (query history + recent files); `None` if unavailable.
+    state_store: Option<sextant_state::StateStore>,
+    /// Active modal list picker (history / recent files), if any.
+    picker: Option<Picker>,
     saved_buffers: std::collections::HashMap<String, String>,
     /// Column/PK metadata per connection, keyed by `(schema, table)`.
     table_meta: std::collections::HashMap<
@@ -151,6 +180,8 @@ impl App {
             last_browse_sql: None,
             save_prompt: None,
             quit_prompt: false,
+            state_store: None,
+            picker: None,
             saved_buffers: std::collections::HashMap::new(),
             table_meta: std::collections::HashMap::new(),
             last_result: None,
@@ -204,6 +235,11 @@ impl App {
         // Quit-with-unsaved-buffers prompt.
         if self.quit_prompt {
             render_quit_prompt(frame, area);
+        }
+
+        // Modal list picker (history / recent files).
+        if let Some(picker) = &self.picker {
+            render_picker(frame, area, picker);
         }
 
         // Status line at the bottom.
@@ -265,7 +301,7 @@ impl App {
         } else if self.focus == Focus::Grid && self.result_grid.is_editable() {
             " <Enter> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
         } else {
-            " <Space>e editor │ <C-q> quit "
+            " <Space>e editor │ <Space>h history │ <Space>r recent │ <C-q> quit "
         };
         let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
 
@@ -320,6 +356,18 @@ impl App {
             return;
         }
 
+        // Modal list picker (history / recent files) swallows keys until closed.
+        if self.picker.is_some() {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => self.picker_move(1),
+                KeyCode::Char('k') | KeyCode::Up => self.picker_move(-1),
+                KeyCode::Enter => self.picker_select(),
+                KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
+                _ => {}
+            }
+            return;
+        }
+
         if self.editor_open {
             let (new_mode, action) = self.editor.handle_key(key, self.mode);
             tracing::debug!("editor action: {:?}, new_mode: {:?}", action, new_mode);
@@ -368,6 +416,16 @@ impl App {
                     Focus::Tree => Focus::Grid,
                     Focus::Grid => Focus::Tree,
                 };
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('h') if self.pending_leader => {
+                self.open_history(tx);
+                self.pending_leader = false;
+                self.pending_g = false;
+            }
+            KeyCode::Char('r') if self.pending_leader => {
+                self.open_recent_files(tx);
                 self.pending_leader = false;
                 self.pending_g = false;
             }
@@ -743,13 +801,51 @@ impl App {
                 if let (Some(name), Some(sql)) =
                     (self.connection_name.clone(), self.last_browse_sql.clone())
                 {
-                    self.run_sql(&name, sql, tx);
+                    self.run_sql(&name, sql, tx, false);
                 }
             }
             AppMsg::CommitResult(Err(error)) => {
                 tracing::warn!("commit error: {}", error);
                 // Keep pending edits so the user can fix and retry.
                 self.last_error = Some(error);
+            }
+            AppMsg::HistoryLoaded(entries) => {
+                let items = entries
+                    .into_iter()
+                    .map(|h| {
+                        let first = h.sql.lines().next().unwrap_or("").trim();
+                        let dur = h
+                            .duration_ms
+                            .map(|d| format!("{d}ms"))
+                            .unwrap_or_else(|| "-".into());
+                        let mark = if h.error.is_some() { "✗" } else { " " };
+                        let label =
+                            format!("{mark} [{}] {} ({dur})", h.connection, truncate(first, 60));
+                        PickerItem {
+                            label,
+                            action: PickerAction::LoadSql(h.sql),
+                        }
+                    })
+                    .collect();
+                self.picker = Some(Picker {
+                    title: "Query history".into(),
+                    items,
+                    selected: 0,
+                });
+            }
+            AppMsg::RecentFilesLoaded(entries) => {
+                let items = entries
+                    .into_iter()
+                    .map(|f| PickerItem {
+                        label: format!("{}  ({})", f.path, f.last_opened),
+                        action: PickerAction::OpenFile(std::path::PathBuf::from(f.path)),
+                    })
+                    .collect();
+                self.picker = Some(Picker {
+                    title: "Recent files".into(),
+                    items,
+                    selected: 0,
+                });
             }
             AppMsg::Quit => {
                 self.should_quit = true;
@@ -820,6 +916,7 @@ impl App {
                 self.editor.set_active_path(path.to_path_buf());
                 self.editor.mark_saved();
                 self.last_error = None;
+                self.record_recent_file(path);
             }
             Err(e) => {
                 self.last_error = Some(format!("save failed: {e}"));
@@ -836,12 +933,22 @@ impl App {
         // Ad-hoc editor results are not tied to a browseable table → read-only.
         self.result_grid.set_edit_context(None);
         self.last_browse_sql = None;
-        self.run_sql(&name, sql, tx);
+        self.run_sql(&name, sql, tx, true);
     }
 
     /// Spawn a query against the named connection's executor; the result is
     /// delivered back through the channel as `QueryResult`/`QueryError`.
-    fn run_sql(&mut self, conn_name: &str, sql: String, tx: &UnboundedSender<AppMsg>) {
+    ///
+    /// When `record` is set, the statement (with its duration and any error) is
+    /// appended to the query history. Auto-generated queries (table browse,
+    /// post-commit refresh) pass `record = false` to keep the history clean.
+    fn run_sql(
+        &mut self,
+        conn_name: &str,
+        sql: String,
+        tx: &UnboundedSender<AppMsg>,
+        record: bool,
+    ) {
         tracing::info!("run_sql: conn='{}', sql='{}'", conn_name, sql.trim());
         let Some(executor) = self.executors.get(conn_name).cloned() else {
             tracing::warn!(
@@ -853,8 +960,25 @@ impl App {
         };
         self.query_start = Some(Instant::now());
         let tx = tx.clone();
+        let store = if record {
+            self.state_store.clone()
+        } else {
+            None
+        };
+        let conn = conn_name.to_string();
         tokio::spawn(async move {
-            match executor.execute(&sql).await {
+            let started = Instant::now();
+            let outcome = executor.execute(&sql).await;
+
+            if let Some(store) = store {
+                let duration_ms = Some(started.elapsed().as_millis() as i64);
+                let error = outcome.as_ref().err().map(|e| e.to_string());
+                let _ = store
+                    .record_query(&conn, &sql, duration_ms, error.as_deref())
+                    .await;
+            }
+
+            match outcome {
                 Ok(result) => {
                     let _ = tx.send(AppMsg::QueryResult(result));
                 }
@@ -863,6 +987,86 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Record a saved file in the recent-files ring (fire-and-forget).
+    fn record_recent_file(&self, path: &std::path::Path) {
+        if let (Some(store), Some(conn)) = (self.state_store.clone(), self.connection_name.clone())
+        {
+            let path = path.to_string_lossy().into_owned();
+            tokio::spawn(async move {
+                let _ = store.record_file(&conn, &path).await;
+            });
+        }
+    }
+
+    /// Load the query history into a modal picker (async fetch → `HistoryLoaded`).
+    fn open_history(&self, tx: &UnboundedSender<AppMsg>) {
+        let Some(store) = self.state_store.clone() else {
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(items) = store.recent_queries(50).await {
+                let _ = tx.send(AppMsg::HistoryLoaded(items));
+            }
+        });
+    }
+
+    /// Load the active connection's recent files into a modal picker.
+    fn open_recent_files(&self, tx: &UnboundedSender<AppMsg>) {
+        let (Some(store), Some(conn)) = (self.state_store.clone(), self.connection_name.clone())
+        else {
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(items) = store.recent_files(&conn).await {
+                let _ = tx.send(AppMsg::RecentFilesLoaded(items));
+            }
+        });
+    }
+
+    /// Move the picker selection by `delta`, wrapping around.
+    fn picker_move(&mut self, delta: isize) {
+        if let Some(p) = self.picker.as_mut() {
+            if p.items.is_empty() {
+                return;
+            }
+            let len = p.items.len() as isize;
+            p.selected = (p.selected as isize + delta).rem_euclid(len) as usize;
+        }
+    }
+
+    /// Act on the highlighted picker entry, then dismiss the picker.
+    fn picker_select(&mut self) {
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        let Picker {
+            items, selected, ..
+        } = picker;
+        let Some(item) = items.into_iter().nth(selected) else {
+            return;
+        };
+        match item.action {
+            PickerAction::LoadSql(sql) => self.load_into_editor(&sql, None),
+            PickerAction::OpenFile(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => self.load_into_editor(&content, Some(path)),
+                Err(e) => self.last_error = Some(format!("open failed: {e}")),
+            },
+        }
+    }
+
+    /// Open the editor with the given content; when `path` is set, bind it as
+    /// the buffer's file (a freshly-loaded file is not dirty).
+    fn load_into_editor(&mut self, content: &str, path: Option<std::path::PathBuf>) {
+        self.open_editor();
+        self.editor.set_content(content);
+        if let Some(path) = path {
+            self.editor.set_active_path(path);
+            self.editor.mark_saved();
+        }
     }
 
     /// Driver for a connection by name (from the loaded config).
@@ -974,7 +1178,7 @@ impl App {
 
         self.connection_name = Some(conn_name.clone());
         self.last_browse_sql = Some(sql.clone());
-        self.run_sql(&conn_name, sql, tx);
+        self.run_sql(&conn_name, sql, tx, false);
         self.focus = Focus::Grid;
     }
 
@@ -1058,6 +1262,12 @@ pub fn run() -> io::Result<()> {
 async fn run_async() -> io::Result<()> {
     let mut terminal = setup_terminal()?;
     let mut app = App::new()?;
+
+    // Open the local state store; the app degrades gracefully if it fails.
+    match sextant_state::StateStore::open(&sextant_config::state_db_path()).await {
+        Ok(store) => app.state_store = Some(store),
+        Err(e) => tracing::warn!("state store unavailable: {e}"),
+    }
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppMsg>();
     let mut event_stream = crossterm::event::EventStream::new();
@@ -1197,6 +1407,75 @@ fn render_save_prompt(frame: &mut Frame, area: Rect, name: &str) {
                 Style::default().fg(Color::DarkGray),
             )),
         ],
+    );
+}
+
+/// Truncate `s` to at most `max` chars, appending `…` when shortened.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{head}…")
+    }
+}
+
+/// Render a modal list picker (query history / recent files).
+fn render_picker(frame: &mut Frame, area: Rect, picker: &Picker) {
+    let width = (area.width as f32 * 0.7).max(20.0) as u16;
+    let height = ((picker.items.len() as u16).max(1) + 3).min(area.height.max(6));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    // Rows that fit inside the borders, minus the footer hint line.
+    let max_rows = height.saturating_sub(3) as usize;
+    let offset = picker.selected.saturating_sub(max_rows.saturating_sub(1));
+
+    let mut lines: Vec<Line> = if picker.items.is_empty() {
+        vec![Line::from(Span::styled(
+            "(empty)",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    } else {
+        picker
+            .items
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(max_rows)
+            .map(|(i, item)| {
+                if i == picker.selected {
+                    Line::from(Span::styled(
+                        format!("▶ {}", item.label),
+                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                    ))
+                } else {
+                    Line::from(Span::raw(format!("  {}", item.label)))
+                }
+            })
+            .collect()
+    };
+    lines.push(Line::from(Span::styled(
+        "<j/k> move │ <Enter> open │ <Esc> close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!(" {} ", picker.title))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .style(Style::default().bg(Color::Black)),
+        ),
+        rect,
     );
 }
 
@@ -1925,5 +2204,68 @@ mod tests {
         app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('c'))));
         assert!(!app.quit_prompt);
         assert!(!app.should_quit);
+    }
+
+    fn picker_with(actions: Vec<PickerAction>) -> Picker {
+        Picker {
+            title: "test".into(),
+            items: actions
+                .into_iter()
+                .enumerate()
+                .map(|(i, action)| PickerItem {
+                    label: format!("item {i}"),
+                    action,
+                })
+                .collect(),
+            selected: 0,
+        }
+    }
+
+    #[test]
+    fn picker_navigation_wraps() {
+        let mut app = test_app();
+        app.picker = Some(picker_with(vec![
+            PickerAction::LoadSql("a".into()),
+            PickerAction::LoadSql("b".into()),
+        ]));
+
+        // k from the first item wraps to the last.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('k'))));
+        assert_eq!(app.picker.as_ref().unwrap().selected, 1);
+        // j from the last item wraps back to the first.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('j'))));
+        assert_eq!(app.picker.as_ref().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn picker_select_loads_sql_into_editor() {
+        let mut app = test_app();
+        app.picker = Some(picker_with(vec![
+            PickerAction::LoadSql("SELECT 1".into()),
+            PickerAction::LoadSql("SELECT 2".into()),
+        ]));
+
+        // Move to the second entry and select it.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('j'))));
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Enter)));
+
+        assert!(app.picker.is_none(), "picker should close after selection");
+        assert!(app.editor_open, "selecting loads the query into the editor");
+        assert_eq!(app.editor.content(), "SELECT 2");
+    }
+
+    #[test]
+    fn picker_esc_dismisses_without_action() {
+        let mut app = test_app();
+        app.picker = Some(picker_with(vec![PickerAction::LoadSql("SELECT 1".into())]));
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(app.picker.is_none());
+        assert!(!app.editor_open);
+    }
+
+    #[test]
+    fn truncate_shortens_long_strings() {
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("hello world", 5), "hell…");
     }
 }

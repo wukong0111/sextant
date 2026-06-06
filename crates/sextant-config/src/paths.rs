@@ -21,6 +21,12 @@ pub fn config_dir() -> PathBuf {
 /// Returns the directory where saved `.sql` queries live
 /// (`$XDG_DATA_HOME/sextant/queries` or `~/.local/share/sextant/queries`).
 pub fn queries_dir() -> PathBuf {
+    data_dir().join("queries")
+}
+
+/// Returns the sextant data directory
+/// (`$XDG_DATA_HOME/sextant` or `~/.local/share/sextant`).
+fn data_dir() -> PathBuf {
     let data = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         PathBuf::from(xdg)
     } else {
@@ -29,7 +35,13 @@ pub fn queries_dir() -> PathBuf {
             .join(".local")
             .join("share")
     };
-    data.join("sextant").join("queries")
+    data.join("sextant")
+}
+
+/// Returns the path to the local application state database
+/// (`$XDG_DATA_HOME/sextant/state.db` or `~/.local/share/sextant/state.db`).
+pub fn state_db_path() -> PathBuf {
+    data_dir().join("state.db")
 }
 
 /// Resolve a user-provided query name to a path inside [`queries_dir`],

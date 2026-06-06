@@ -57,6 +57,11 @@ pub fn query_path(name: &str) -> std::path::PathBuf {
     paths::query_path(name)
 }
 
+/// Return the path to the local application state database (`state.db`).
+pub fn state_db_path() -> std::path::PathBuf {
+    paths::state_db_path()
+}
+
 /// Write `content` to a `.sql` file, creating the parent directory if needed.
 ///
 /// Enforces restrictive permissions on Unix per the security model: the

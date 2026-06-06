@@ -1758,6 +1758,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sextant-state"
+version = "0.1.0"
+dependencies = [
+ "sextant-core",
+ "sqlx",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "sextant-ui"
 version = "0.1.0"
 dependencies = [
@@ -1767,6 +1777,7 @@ dependencies = [
  "sextant-config",
  "sextant-core",
  "sextant-db",
+ "sextant-state",
  "tokio",
  "tracing",
  "tui-textarea",

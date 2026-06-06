@@ -10,6 +10,7 @@ license.workspace = true
 sextant-core = { path = "../sextant-core" }
 sextant-config = { path = "../sextant-config" }
 sextant-db = { path = "../sextant-db" }
+sextant-state = { path = "../sextant-state" }
 crossterm = { version = "0.28", features = ["event-stream"] }
 futures = "0.3"
 ratatui = { version = "0.29", features = ["crossterm"] }

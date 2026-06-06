@@ -1,0 +1,15 @@
+[package]
+name = "sextant-state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+sextant-core = { path = "../sextant-core" }
+sqlx = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3"
