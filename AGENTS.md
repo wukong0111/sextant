@@ -17,7 +17,8 @@ Agent-facing reference for the `sextant` project. Read this first before making 
 | File | Purpose |
 |------|---------|
 | `ARCHITECTURE.md` | Code map: data flow, where each concern lives, non-obvious invariants/gotchas, and "how to add X" recipes. Read before touching code. |
-| `sextant-spec.md` | Full product specification (features, UI layout, keybindings, architecture). |
+| `SPEC.md` | Implementation-agnostic product specification: behavior, observable contracts, Given/When/Then acceptance criteria, and product rationale. The canonical "what". |
+| `docs/adr/` | Implementation decision records (the "how/why-of-how"; e.g. sqlx, lock-free txn flag). Each links its product requirement in `SPEC.md`. |
 | `plan.md` | Development roadmap split into phases (Fase 0–3). Check this before starting work. |
 | `MANUAL-QA.md` | Hands-on QA runbook: how to exercise each feature inside the TUI (setup, walkthrough, keybindings). Use to validate UI work that automated tests can't cover. |
 
@@ -35,7 +36,8 @@ This is a Cargo workspace. The root `Cargo.toml` defines workspace metadata; all
 sextant/
 ├── Cargo.toml                 # workspace definition
 ├── plan.md                    # development plan
-├── sextant-spec.md            # product specification
+├── SPEC.md                    # agnostic product specification
+├── docs/adr/                  # implementation decision records
 └── crates/
     ├── sextant-cli/           # binary entry point (main.rs)
     ├── sextant-core/          # domain types, traits, shared errors
@@ -243,6 +245,6 @@ When the user says "vamos con la Fase X" or "implementa el punto Y":
 | File | What to read when... |
 |------|----------------------|
 | `plan.md` | Starting a new phase or task |
-| `sextant-spec.md` | Need product-level context (features, UI, keybindings) |
+| `SPEC.md` | Need product-level context (behavior, UI, keybindings, acceptance criteria) |
 | `Cargo.toml` (root) | Workspace metadata |
 | `crates/*/Cargo.toml` | Crate dependencies and features |

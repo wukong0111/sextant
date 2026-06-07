@@ -1,7 +1,7 @@
 # ARCHITECTURE.md
 
 A code map and orientation guide for `sextant`. Read this alongside `AGENTS.md`
-(project facts, workflow) and `sextant-spec.md` (product spec). The goal is to
+(project facts, workflow) and `SPEC.md` (agnostic product spec). The goal is to
 save you from re-deriving the non-obvious wiring every session.
 
 Symbols are referenced **by name** so you can `grep` for them — line numbers
@@ -122,7 +122,7 @@ These are the things that bite you if you don't know them.
 
 - **A keybinding:** add a branch in `App::handle_key_event` (mind the current
   `Mode`/`Focus` and `pending_leader`/`pending_g` chord state). Document it in
-  `sextant-spec.md` §9.
+  `SPEC.md` §12 (interaction model / default keymap).
 
 - **A driver capability:** enable the `sqlx` feature in the workspace
   `Cargo.toml`, extend `build_connection_url` (`url_builder.rs`), add the

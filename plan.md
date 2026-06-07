@@ -4,7 +4,7 @@
 
 - `Cargo.toml`: reestructurado como workspace con 5 crates.
 - `src/main.rs`: eliminado; entry point movido a `crates/sextant-cli/src/main.rs`.
-- Especificación completa en `sextant-spec.md` con arquitectura, stack y roadmap.
+- Especificación de producto agnóstica en `SPEC.md`; decisiones de implementación en `docs/adr/`.
 
 ## Progreso
 
@@ -383,7 +383,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   fuzzy con flechas o `Ctrl-n`/`Ctrl-p` (las letras filtran).
 
 ### Criterio de éxito v1
-- Todo lo descrito en `sextant-spec.md` §5 funciona.
+- Todo lo descrito en `SPEC.md` §1–16 funciona.
 - Tests unitarios en `sextant-db`, `sextant-sql`, `sextant-state`.
 - `cargo test` pasa en CI.
 - Release build funcional para Linux y macOS.
