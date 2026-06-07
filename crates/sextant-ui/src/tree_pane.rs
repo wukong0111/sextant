@@ -220,6 +220,30 @@ impl TreePane {
         self.table_ref(conn, schema, table).map(|t| t.name.clone())
     }
 
+    /// Enumerate every table of every connected connection as
+    /// `(conn, schema, table, conn_name, schema_name, table_name)`, for the
+    /// fuzzy table finder.
+    pub fn browseable_tables(&self) -> Vec<(usize, usize, usize, String, String, String)> {
+        let mut out = Vec::new();
+        for (ci, conn) in self.connections.iter().enumerate() {
+            if let ConnState::Connected { schemas, .. } = &conn.state {
+                for (si, schema) in schemas.iter().enumerate() {
+                    for (ti, table) in schema.tables.iter().enumerate() {
+                        out.push((
+                            ci,
+                            si,
+                            ti,
+                            conn.name.clone(),
+                            schema.name.clone(),
+                            table.name.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Whether the table at `(conn, schema, table)` is currently expanded.
     pub fn is_table_expanded(&self, conn: usize, schema: usize, table: usize) -> bool {
         self.table_ref(conn, schema, table)

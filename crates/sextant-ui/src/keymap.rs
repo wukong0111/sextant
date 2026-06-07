@@ -39,6 +39,9 @@ pub enum Action {
     Discard,
     EmitDdl,
     Help,
+    CommandPalette,
+    FindTable,
+    OpenFile,
 }
 
 impl Action {
@@ -65,6 +68,9 @@ impl Action {
             "discard" => Action::Discard,
             "emit_ddl" => Action::EmitDdl,
             "help" => Action::Help,
+            "command_palette" => Action::CommandPalette,
+            "find_table" => Action::FindTable,
+            "open_file" => Action::OpenFile,
             _ => return None,
         })
     }
@@ -92,6 +98,9 @@ impl Action {
             Action::Discard => "discard edits (grid)",
             Action::EmitDdl => "emit CREATE TABLE (tree)",
             Action::Help => "this help",
+            Action::CommandPalette => "command palette",
+            Action::FindTable => "find table",
+            Action::OpenFile => "open .sql file",
         }
     }
 }
@@ -243,6 +252,9 @@ impl Keymap {
             ("<C-z>", Action::Discard),
             ("D", Action::EmitDdl),
             ("<Space>?", Action::Help),
+            ("<Space>:", Action::CommandPalette),
+            ("<Space>f", Action::FindTable),
+            ("<Space>o", Action::OpenFile),
         ];
         let mut map = Self {
             bindings: Vec::new(),

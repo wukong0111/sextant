@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use ratatui::crossterm::{
     ExecutableCommand,
-    event::{Event, KeyCode, KeyEvent, KeyEventKind},
+    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
@@ -22,6 +22,9 @@ mod autocomplete;
 
 mod keymap;
 use keymap::{Action, ChordState, KeySpec, Keymap};
+
+mod fuzzy;
+use fuzzy::{FuzzyAction, FuzzyItem, FuzzyPicker};
 
 mod palette;
 use palette::Palette;
@@ -212,6 +215,8 @@ pub struct App {
     pending_dangerous: Option<DangerousStmt>,
     /// Whether the help overlay (cheatsheet) is showing.
     show_help: bool,
+    /// Active fuzzy picker (command palette / find table / open file), if any.
+    fuzzy: Option<FuzzyPicker>,
     /// Interactive password prompt, if a connection needs one.
     password_prompt: Option<PasswordPrompt>,
     /// Orphan-swap recovery prompt shown at startup, if any.
@@ -280,6 +285,7 @@ impl App {
             pending_import: None,
             pending_dangerous: None,
             show_help: false,
+            fuzzy: None,
             password_prompt: None,
             recovery: None,
             session_swap: swap::session_swap_path(),
@@ -364,6 +370,11 @@ impl App {
         // Password prompt.
         if let Some(prompt) = &self.password_prompt {
             render_password_prompt(frame, area, prompt, self.palette);
+        }
+
+        // Fuzzy picker (command palette / find table / open file).
+        if let Some(fuzzy) = &self.fuzzy {
+            render_fuzzy_picker(frame, area, fuzzy, self.palette);
         }
 
         // Help overlay.
@@ -479,6 +490,35 @@ impl App {
         // Help overlay swallows keys until dismissed.
         if self.show_help {
             self.show_help = false;
+            return;
+        }
+
+        // Fuzzy picker (command palette / find table / open file) captures keys:
+        // characters edit the query; navigation is via arrows or Ctrl-n/Ctrl-p.
+        if self.fuzzy.is_some() {
+            match key.code {
+                KeyCode::Esc => self.fuzzy = None,
+                KeyCode::Enter => self.fuzzy_select(tx),
+                KeyCode::Down => self.fuzzy_move(1),
+                KeyCode::Up => self.fuzzy_move(-1),
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.fuzzy_move(1)
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.fuzzy_move(-1)
+                }
+                KeyCode::Backspace => {
+                    if let Some(f) = self.fuzzy.as_mut() {
+                        f.backspace();
+                    }
+                }
+                KeyCode::Char(c) if key.modifiers.is_empty() => {
+                    if let Some(f) = self.fuzzy.as_mut() {
+                        f.push(c);
+                    }
+                }
+                _ => {}
+            }
             return;
         }
 
@@ -723,6 +763,9 @@ impl App {
                 }
             }
             Action::Help => self.show_help = true,
+            Action::CommandPalette => self.open_command_palette(),
+            Action::FindTable => self.open_table_finder(),
+            Action::OpenFile => self.open_file_finder(),
         }
     }
 
@@ -1196,6 +1239,110 @@ impl App {
             Err(e) => {
                 self.last_error = Some(format!("save failed: {e}"));
             }
+        }
+    }
+
+    /// Open the command palette: a fuzzy list of high-level commands.
+    fn open_command_palette(&mut self) {
+        let commands = [
+            (
+                "Open SQL editor",
+                FuzzyAction::Dispatch(Action::ToggleEditor),
+            ),
+            ("Query history", FuzzyAction::Dispatch(Action::OpenHistory)),
+            ("Recent files", FuzzyAction::Dispatch(Action::OpenRecent)),
+            ("Find table", FuzzyAction::FindTable),
+            ("Open .sql file", FuzzyAction::OpenFile),
+            ("Export result set", FuzzyAction::Dispatch(Action::Export)),
+            ("Import into table", FuzzyAction::Dispatch(Action::Import)),
+            ("Emit CREATE TABLE", FuzzyAction::Dispatch(Action::EmitDdl)),
+            ("Help", FuzzyAction::Dispatch(Action::Help)),
+            ("Quit", FuzzyAction::Dispatch(Action::Quit)),
+        ];
+        let items = commands
+            .into_iter()
+            .map(|(label, action)| FuzzyItem {
+                label: label.to_string(),
+                action,
+            })
+            .collect();
+        self.fuzzy = Some(FuzzyPicker::new("Command palette", items));
+    }
+
+    /// Open the table finder: a fuzzy list of every browseable table.
+    fn open_table_finder(&mut self) {
+        let items = self
+            .tree
+            .browseable_tables()
+            .into_iter()
+            .map(
+                |(conn, schema, table, conn_name, schema_name, table_name)| FuzzyItem {
+                    label: format!("{conn_name}  {schema_name}.{table_name}"),
+                    action: FuzzyAction::Browse {
+                        conn,
+                        schema,
+                        table,
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            self.last_error = Some("no connected tables to find".into());
+            return;
+        }
+        self.fuzzy = Some(FuzzyPicker::new("Find table", items));
+    }
+
+    /// Open the file opener: a fuzzy list of `.sql` files in the queries dir.
+    fn open_file_finder(&mut self) {
+        let dir = sextant_config::queries_dir();
+        let mut items: Vec<FuzzyItem> = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("sql"))
+                .map(|path| FuzzyItem {
+                    label: path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    action: FuzzyAction::Load(path),
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        items.sort_by(|a, b| a.label.cmp(&b.label));
+        if items.is_empty() {
+            self.last_error = Some(format!("no .sql files in {}", dir.display()));
+            return;
+        }
+        self.fuzzy = Some(FuzzyPicker::new("Open file", items));
+    }
+
+    /// Move the fuzzy-picker selection by `delta`.
+    fn fuzzy_move(&mut self, delta: isize) {
+        if let Some(f) = self.fuzzy.as_mut() {
+            f.move_selection(delta);
+        }
+    }
+
+    /// Act on the highlighted fuzzy-picker item, then close the picker.
+    fn fuzzy_select(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(action) = self.fuzzy.take().and_then(FuzzyPicker::into_selected) else {
+            return;
+        };
+        match action {
+            FuzzyAction::Dispatch(a) => self.dispatch(a, tx),
+            FuzzyAction::FindTable => self.open_table_finder(),
+            FuzzyAction::OpenFile => self.open_file_finder(),
+            FuzzyAction::Browse {
+                conn,
+                schema,
+                table,
+            } => self.browse_table(conn, schema, table, tx),
+            FuzzyAction::Load(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => self.load_into_editor(&content, Some(path)),
+                Err(e) => self.last_error = Some(format!("open failed: {e}")),
+            },
         }
     }
 
@@ -2058,6 +2205,58 @@ fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousSt
     );
 }
 
+/// Render the fuzzy picker: a query line above the ranked, filtered list.
+fn render_fuzzy_picker(frame: &mut Frame, area: Rect, fuzzy: &FuzzyPicker, p: Palette) {
+    let width = (area.width as f32 * 0.6).clamp(30.0, 80.0) as u16;
+    let height = (area.height as f32 * 0.6).clamp(6.0, 20.0) as u16;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    // Query line, then as many ranked items as fit (minus borders + query).
+    let max_rows = height.saturating_sub(3) as usize;
+    let offset = fuzzy.selected.saturating_sub(max_rows.saturating_sub(1));
+    let labels = fuzzy.visible_labels();
+
+    let mut lines: Vec<Line> = vec![Line::from(vec![
+        Span::styled("> ", Style::default().fg(p.accent)),
+        Span::styled(
+            format!("{}_", fuzzy.query),
+            Style::default().fg(p.foreground),
+        ),
+    ])];
+    for (i, label) in labels.iter().enumerate().skip(offset).take(max_rows) {
+        if i == fuzzy.selected {
+            lines.push(Line::from(Span::styled(
+                format!("▶ {label}"),
+                Style::default().fg(p.selection_fg).bg(p.selection_bg),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("  {label}"),
+                Style::default().fg(p.foreground),
+            )));
+        }
+    }
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!(" {} ", fuzzy.title))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(p.accent))
+                .style(Style::default().bg(p.background)),
+        ),
+        rect,
+    );
+}
+
 /// Render the help overlay: a cheatsheet built dynamically from the keymap,
 /// plus a static section for editor/modal keys not in the remappable map.
 fn render_help_overlay(frame: &mut Frame, area: Rect, keymap: &Keymap, p: Palette) {
@@ -2278,7 +2477,6 @@ fn render_quit_prompt(frame: &mut Frame, area: Rect, p: Palette) {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
-    use ratatui::crossterm::event::KeyModifiers;
     use ratatui::style::Color;
 
     fn test_app() -> App {
@@ -2490,6 +2688,35 @@ mod tests {
         )));
         assert!(app.recovery.is_none());
         assert!(!app.editor_open);
+    }
+
+    fn press(app: &mut App, c: char) {
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
+    fn command_palette_opens_filters_and_closes() {
+        let mut app = test_app();
+        press(&mut app, ' ');
+        press(&mut app, ':');
+        assert!(
+            app.fuzzy.is_some(),
+            "<Space>: should open the command palette"
+        );
+
+        // Typing edits the query (not navigation) and filters the list.
+        press(&mut app, 'h');
+        let visible = app.fuzzy.as_ref().unwrap().visible_labels().len();
+        assert!((1..10).contains(&visible), "query should filter commands");
+
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.fuzzy.is_none());
     }
 
     #[test]
