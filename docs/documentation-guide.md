@@ -27,11 +27,28 @@ mirror this change?* If yes → spec. Concretely:
 - **Refactor / library swap** → spec **no**; ADR **yes** if the decision is
   noteworthy.
 
-## Order (spec-first)
+## Lifecycle of a change (spec- and test-first)
 
-`SPEC.md` (what + G/W/T) → implement and verify against that criterion → ADR if a
-technical decision was made → `ARCHITECTURE.md` if the structure changed →
-`plan.md` (log + commit).
+1. **Spec** — if observable behavior changes, write/adjust the `SPEC.md` §17
+   Given/When/Then **first** (see litmus above). The criterion is the prose form
+   of the test you're about to write.
+2. **Test (red)** — translate each new/changed criterion into the strongest
+   feasible tier (UNIT → APP → E2E, see `docs/coverage.md`) and add its row to
+   `coverage.md`. The test fails first. For the slice only a human can verify
+   (color, real-TTY feel, PG/MySQL), register it in coverage's manual catalog
+   instead — that *is* its coverage.
+3. **Implement (green)** — the minimal code that makes the tests/criteria pass.
+4. **Verify** — `make check` (compile, test, clippy, fmt); `cargo run` if the
+   TUI changed.
+5. **Document** — ADR if a noteworthy technical decision was made;
+   `ARCHITECTURE.md` if the structure/wiring changed; finalize the `coverage.md`
+   row (definitive tier).
+6. **Log** — `plan.md` status + commit hash, and commit atomically.
+
+**Conditionals.** A refactor or library swap skips steps 1–2 (no observable
+change) but still needs an ADR if the decision is noteworthy. A bug fix that
+aligns code with the spec skips the spec edit (the spec was already right) but
+still **starts with a red regression test**.
 
 ## Invariant
 

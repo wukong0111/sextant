@@ -87,7 +87,7 @@ When the user says "vamos con la Fase X" or "implementa el punto Y" (the `plan-t
 1. **Read `plan.md` first.** Check what is ✅ vs ⬜. Don't assume a task is done without verifying it in the code.
 2. **Present options before acting.** If multiple approaches exist (library A vs B, architecture X vs Y), present tradeoffs and wait for a decision.
 3. **Define the scope.** Ask whether the user wants the full phase or a specific subset.
-4. **Code → Verify → Commit.** Each task must compile, pass tests, have a verifiable success criterion, and be committed atomically with a descriptive message.
+4. **Spec → Test → Code → Verify → Commit.** Follow the spec- and test-first lifecycle in **`docs/documentation-guide.md`**: behavior change → §17 criterion → failing test (or manual-catalog entry) → minimal code → `make check` → atomic commit. Every task needs a verifiable success criterion.
 5. **Update the plan immediately.** Mark the task `[x] ✅` in `plan.md` and add the commit hash to the progress table.
    - **Commit-hash ordering:** if `plan.md` must reference the hash of the change being committed, do it in two steps — (1) commit the code, (2) update `plan.md` with the real hash in a follow-up commit. Never `git commit --amend` to inject the hash; the amend changes the hash and creates an inconsistent reference.
 6. **Plan/code sync: correctness wins.** If the implementation diverges from `plan.md` for technical reasons, update `plan.md` to match the code and document why. The plan is a living document.
