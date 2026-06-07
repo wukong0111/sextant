@@ -37,3 +37,9 @@ technical decision was made → `ARCHITECTURE.md` if the structure changed →
 
 `SPEC.md` is **agnostic** (no language, library, or architecture). Never leak
 implementation into it — that belongs in `docs/adr/` and `ARCHITECTURE.md`.
+
+## Acceptance-criteria binding
+
+The mapping from `SPEC.md` §17 criteria to this implementation's tests lives in
+`docs/coverage.md` (per-implementation, kept out of the agnostic spec). A new
+criterion adds a row there; a row at tier **—** is explicit test debt.
