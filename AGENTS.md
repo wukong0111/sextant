@@ -95,14 +95,7 @@ When the user says "vamos con la Fase X" or "implementa el punto Y" (the `plan-t
 
 **Documentation discipline:** a change touches **only the docs its kind implies** — `SPEC.md` for observable behavior/contracts (with a matching §17 Given/When/Then), a **new immutable** ADR for noteworthy implementation decisions, `ARCHITECTURE.md` for structural changes, `plan.md` always (status + hash). Spec-first; keep `SPEC.md` agnostic. Full rules in **`docs/documentation-guide.md`**.
 
----
-
-## Behavioral Guidelines (for LLM Agents)
-
-1. **Think before coding.** State assumptions explicitly. If something is unclear or has multiple interpretations, ask.
-2. **Simplicity first.** Minimum code that solves the problem. No speculative features or single-use abstractions.
-3. **Goal-oriented execution.** Turn vague requests into verifiable criteria: "fix the bug" → "write a test that reproduces it, then make it pass"; "refactor X" → "ensure tests pass before and after".
-4. **Do not hide confusion.** If unsure, name what is confusing and ask before implementing.
+> Turn vague requests into verifiable criteria before coding ("fix the bug" → "write a failing test, then make it pass"). State assumptions; if something is unclear or has multiple readings, ask instead of guessing.
 
 ---
 
@@ -120,9 +113,4 @@ When the user says "vamos con la Fase X" or "implementa el punto Y" (the `plan-t
 | `make seed-sqlite` / `make seed` | Seed local SQLite / all DBs |
 | `make test-db` | Full cycle: start Docker DBs, run tests, tear down |
 
-| File | Read when… |
-|------|------------|
-| `plan.md` | Starting a new phase or task |
-| `SPEC.md` | Need product-level context (behavior, UI, keybindings, criteria) |
-| `ARCHITECTURE.md` | Need the code map / where a concern lives |
-| `Cargo.toml` (root) · `crates/*/Cargo.toml` | Workspace metadata · crate deps & features |
+(Which doc to read when is the **Key Documents** table above.)
