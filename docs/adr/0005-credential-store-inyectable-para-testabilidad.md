@@ -2,7 +2,7 @@
 
 ## Estado
 
-Aceptado — 2026-06-07
+Aceptado — 2026-06-07 (`082eade`)
 
 Refina **ADR-0004** (no lo sustituye): la cascada de credenciales no cambia; se
 hace inyectable y testeable.
