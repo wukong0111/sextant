@@ -38,6 +38,29 @@ tasks; their results return as `AppMsg` variants over an
 
 ---
 
+## Crates & dependency rules
+
+All code lives in `crates/` (the workspace tree is in `AGENTS.md`).
+
+- **`sextant-cli`** — The only crate that produces a binary (`sextant`). Minimal:
+  installs `color_eyre`, sets up `tracing`, calls `sextant_ui::run()`.
+- **`sextant-core`** — Domain primitives (`Driver`, `Connection`, `CellValue`,
+  `QueryResult`) and the `QueryExecutor` trait. Lightweight, few deps.
+- **`sextant-config`** — Loads `connections.toml` / `config.toml` / `keys.toml`
+  from XDG paths (`~/.config/sextant/`); validates per-driver required fields.
+- **`sextant-db`** — Implements `QueryExecutor` via `sqlx`; per-connection pools.
+  All DB I/O is async (`tokio`).
+- **`sextant-state`** — Owns the app's private `state.db` (query history,
+  recent-files ring). Async (`sqlx`/SQLite), independent of user connections.
+- **`sextant-ui`** — TUI event loop, state machine (`Normal`/`Insert`/
+  `EditorOpen`), and all `ratatui` widgets.
+
+Dependency edges: `cli → ui → core`; `db`, `config`, `state` each `→ core`.
+The service crates (`db`, `config`, `state`) must compile and be testable
+**without** depending on `sextant-ui`.
+
+---
+
 ## Where things live
 
 | Concern | File |
