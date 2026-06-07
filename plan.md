@@ -13,7 +13,7 @@
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
 | Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `4a2636e` (fix SQLite BOOLEAN) |
 | Fase 2 — v0.2 | ✅ Completada | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup), `76858c7` (chore: normalización fmt/clippy toolchain 1.96), `2de33b5` (base: introspección de columnas + PK + cache), `c826b0c` (base: quote_ident + DDL `CREATE TABLE`), `b8bc78f` (2.4 columnas en árbol + browse rows + DDL), `95b4427` (2.3 autocomplete), `aa662b0` (2.2 base: transacciones + DML gen), `4d7bfac` (2.2 grid editable CRUD), `bf1a892` (2.5 multi-buffer tabs), `f0c5232` (2.4 índices/FKs en árbol), `b7e6148` (2.5 guardado .sql + prompt al salir) |
-| Fase 3 — v1 | 🚧 En progreso | `d88ddc3` (3.2 query history + recent files), `96eea9f` (3.1 export CSV/JSON/SQL), `49a6871` (3.1 import core), `1111aeb` (3.1 import UI), `2a8a1e6` (3.3 transacciones + guard destructivo), `6468283` (3.4 themes), `23228bf` (3.4 keymap), `a391c65` (3.5 swap files + recovery), `f4da375` (3.6 keyring), `ca1faac` (3.7 help overlay), `6035b9d` (3.7 fuzzy palette/find/open), `484f8fd` (3.7 spinner), `2199cc5` (3.2 snippets) |
+| Fase 3 — v1 | ✅ Completada | `d88ddc3` (3.2 query history + recent files), `96eea9f` (3.1 export CSV/JSON/SQL), `49a6871` (3.1 import core), `1111aeb` (3.1 import UI), `2a8a1e6` (3.3 transacciones + guard destructivo), `6468283` (3.4 themes), `23228bf` (3.4 keymap), `a391c65` (3.5 swap files + recovery), `f4da375` (3.6 keyring), `ca1faac` (3.7 help overlay), `6035b9d` (3.7 fuzzy palette/find/open), `484f8fd` (3.7 spinner), `2199cc5` (3.2 snippets), `d35734e` (2.2 optimistic concurrency) |
 
 ## Principios Directores
 
@@ -174,7 +174,12 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - [x] ✅ **Inline editing**: `Enter` en celda → modo edición; teclear, `Enter` confirma a pending, `Esc` cancela; celda modificada marcada (color), filas nuevas en verde, borradas tachadas en rojo.
 - [x] ✅ **Operaciones**: `o` fila vacía al final, `dd` marcar borrado (toggle), `Ctrl+S` commit (modal de confirmación con los statements), `Ctrl+Z` descartar.
 - [x] ✅ **Commit**: `build_update`/`build_insert`/`build_delete` con WHERE por PK (valores originales), ejecutado en transacción (`execute_transaction`); refresco re-ejecutando el browse.
-- [ ] ⬜ Optimistic concurrency (chequeo de valores originales en WHERE) — **diferido a Fase 3** por decisión de alcance (v0.2 usa WHERE solo por PK).
+- [x] ✅ Optimistic concurrency (chequeo de valores originales en WHERE) (`d35734e`,
+  hecho en Fase 3): UPDATE empareja PK + valores originales de las columnas
+  editadas; DELETE empareja la fila original completa. `where_match` emite
+  `col IS NULL` para NULLs. Limitación: un conflicto se manifiesta como "0 filas
+  afectadas" (sin cambio tras refrescar); surface explícito del error queda como
+  follow-up.
 
 ### 2.3 Autocomplete (básico) ✅ (`95b4427`)
 
