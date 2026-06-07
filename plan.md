@@ -13,7 +13,7 @@
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
 | Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `4a2636e` (fix SQLite BOOLEAN) |
 | Fase 2 — v0.2 | ✅ Completada | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup), `76858c7` (chore: normalización fmt/clippy toolchain 1.96), `2de33b5` (base: introspección de columnas + PK + cache), `c826b0c` (base: quote_ident + DDL `CREATE TABLE`), `b8bc78f` (2.4 columnas en árbol + browse rows + DDL), `95b4427` (2.3 autocomplete), `aa662b0` (2.2 base: transacciones + DML gen), `4d7bfac` (2.2 grid editable CRUD), `bf1a892` (2.5 multi-buffer tabs), `f0c5232` (2.4 índices/FKs en árbol), `b7e6148` (2.5 guardado .sql + prompt al salir) |
-| Fase 3 — v1 | 🚧 En progreso | `d88ddc3` (3.2 query history + recent files), `96eea9f` (3.1 export CSV/JSON/SQL), `49a6871` (3.1 import core), `1111aeb` (3.1 import UI), `2a8a1e6` (3.3 transacciones + guard destructivo), `6468283` (3.4 themes), `23228bf` (3.4 keymap) |
+| Fase 3 — v1 | 🚧 En progreso | `d88ddc3` (3.2 query history + recent files), `96eea9f` (3.1 export CSV/JSON/SQL), `49a6871` (3.1 import core), `1111aeb` (3.1 import UI), `2a8a1e6` (3.3 transacciones + guard destructivo), `6468283` (3.4 themes), `23228bf` (3.4 keymap), `a391c65` (3.5 swap files + recovery) |
 
 ## Principios Directores
 
@@ -326,13 +326,22 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   `Palette` de colores `ratatui` una vez al arranque y lo propaga al árbol, grid,
   editor y todos los modales. El tema dark por defecto reproduce el aspecto previo.
 
-### 3.5 Swap Files + Recovery
+### 3.5 Swap Files + Recovery ✅ (`a391c65`)
 
-- Cada 30s, si buffer dirty: escribir `.swp` en `~/.local/state/sextant/swap/`.
-- Formato: contenido SQL + JSON con cursor/selection.
-- Al arrancar, escanear `.swp` huérfanos → prompt de recovery.
-- Borrar `.swp` en quit limpio o al guardar.
-- Permisos `0600`.
+- [x] ✅ Cada ~30s, si hay buffers dirty: escribir swap en
+  `$XDG_STATE_HOME/sextant/swap/` (`~/.local/state/sextant/swap/`).
+  **Divergencia**: un único fichero por sesión (`session-<pid>.swp`) con *todos*
+  los buffers dirty, en vez de un `.swp` por buffer.
+- [x] ✅ Formato: JSON con un array de buffers `{path, cursor, content}`.
+  **Divergencia**: se persiste el cursor pero **no** la selección (la API de
+  `tui-textarea` no la expone cómodamente); restaurar selección queda diferido.
+- [x] ✅ Al arrancar, escanear `.swp` huérfanos (cualquier `*.swp` que no sea el de
+  la sesión actual) → prompt de recovery (`r` restaurar / `d` descartar / `<Esc>`
+  ignorar). El escaneo vive en `run_async`, no en `App::new`, para que los tests
+  unitarios no toquen el FS.
+- [x] ✅ Borrar swap en quit limpio (al salir del loop) y al guardar (cuando ya no
+  quedan buffers dirty); el tick también lo borra si nada está dirty.
+- [x] ✅ Permisos `0600` (fichero) / `0700` (dir) vía `sextant-config::write_swap`.
 
 ### 3.6 Credentials via Keyring
 
