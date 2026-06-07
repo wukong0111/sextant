@@ -38,6 +38,7 @@ pub enum Action {
     Commit,
     Discard,
     EmitDdl,
+    Help,
 }
 
 impl Action {
@@ -63,8 +64,35 @@ impl Action {
             "commit" => Action::Commit,
             "discard" => Action::Discard,
             "emit_ddl" => Action::EmitDdl,
+            "help" => Action::Help,
             _ => return None,
         })
+    }
+
+    /// A short human description, shown in the help overlay.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Action::Quit => "quit",
+            Action::FocusNext => "switch focus (tree/grid)",
+            Action::ToggleEditor => "open SQL editor",
+            Action::OpenHistory => "query history",
+            Action::OpenRecent => "recent files",
+            Action::Export => "export result set",
+            Action::Import => "import into table",
+            Action::Down => "move down",
+            Action::Up => "move up",
+            Action::Left => "collapse / move left",
+            Action::Right => "expand / move right",
+            Action::Top => "go to top",
+            Action::Bottom => "go to bottom",
+            Action::Activate => "connect / browse / edit cell",
+            Action::AddRow => "add row (grid)",
+            Action::DeleteRow => "delete row (grid)",
+            Action::Commit => "commit edits (grid)",
+            Action::Discard => "discard edits (grid)",
+            Action::EmitDdl => "emit CREATE TABLE (tree)",
+            Action::Help => "this help",
+        }
     }
 }
 
@@ -148,6 +176,33 @@ fn tokenize(chord: &str) -> Option<Vec<KeySpec>> {
     if specs.is_empty() { None } else { Some(specs) }
 }
 
+/// Format a chord back into its display string (inverse of [`tokenize`]).
+fn format_chord(specs: &[KeySpec]) -> String {
+    specs.iter().map(format_key).collect()
+}
+
+/// Format a single key for display (`<Space>`, `<C-s>`, `g`).
+fn format_key(spec: &KeySpec) -> String {
+    if spec.ctrl {
+        if let KeyCode::Char(c) = spec.code {
+            return format!("<C-{c}>");
+        }
+    }
+    match spec.code {
+        KeyCode::Char(' ') => "<Space>".to_string(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Tab => "<Tab>".to_string(),
+        KeyCode::Enter => "<Enter>".to_string(),
+        KeyCode::Esc => "<Esc>".to_string(),
+        KeyCode::Backspace => "<BS>".to_string(),
+        KeyCode::Up => "<Up>".to_string(),
+        KeyCode::Down => "<Down>".to_string(),
+        KeyCode::Left => "<Left>".to_string(),
+        KeyCode::Right => "<Right>".to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
 /// The outcome of feeding the current pending key sequence to a [`Keymap`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolve {
@@ -187,6 +242,7 @@ impl Keymap {
             ("<C-s>", Action::Commit),
             ("<C-z>", Action::Discard),
             ("D", Action::EmitDdl),
+            ("<Space>?", Action::Help),
         ];
         let mut map = Self {
             bindings: Vec::new(),
@@ -219,6 +275,18 @@ impl Keymap {
         } else {
             self.bindings.push((specs, action));
         }
+    }
+
+    /// `(chord display, action description)` for every binding, sorted for a
+    /// stable help overlay.
+    pub fn describe(&self) -> Vec<(String, &'static str)> {
+        let mut out: Vec<(String, &'static str)> = self
+            .bindings
+            .iter()
+            .map(|(specs, a)| (format_chord(specs), a.label()))
+            .collect();
+        out.sort();
+        out
     }
 
     /// Resolve a pending key sequence against the map.
@@ -375,6 +443,25 @@ mod tests {
         // The default `dd` still works.
         assert_eq!(state.feed(&map, key('d')), None);
         assert_eq!(state.feed(&map, key('d')), Some(Action::DeleteRow));
+    }
+
+    #[test]
+    fn formats_chords_for_help() {
+        assert_eq!(format_chord(&tokenize("<Space>e").unwrap()), "<Space>e");
+        assert_eq!(format_chord(&tokenize("gg").unwrap()), "gg");
+        assert_eq!(format_chord(&tokenize("<C-s>").unwrap()), "<C-s>");
+        assert_eq!(format_chord(&tokenize("<Tab>").unwrap()), "<Tab>");
+    }
+
+    #[test]
+    fn describe_includes_help_binding() {
+        let map = Keymap::defaults();
+        let d = map.describe();
+        assert!(d.iter().any(|(c, l)| c == "<Space>?" && *l == "this help"));
+        // describe() is sorted for a stable overlay.
+        let mut sorted = d.clone();
+        sorted.sort();
+        assert_eq!(d, sorted);
     }
 
     #[test]

@@ -210,6 +210,8 @@ pub struct App {
     pending_import: Option<PendingImport>,
     /// Destructive editor statement awaiting confirmation, if any.
     pending_dangerous: Option<DangerousStmt>,
+    /// Whether the help overlay (cheatsheet) is showing.
+    show_help: bool,
     /// Interactive password prompt, if a connection needs one.
     password_prompt: Option<PasswordPrompt>,
     /// Orphan-swap recovery prompt shown at startup, if any.
@@ -277,6 +279,7 @@ impl App {
             import_prompt: None,
             pending_import: None,
             pending_dangerous: None,
+            show_help: false,
             password_prompt: None,
             recovery: None,
             session_swap: swap::session_swap_path(),
@@ -361,6 +364,11 @@ impl App {
         // Password prompt.
         if let Some(prompt) = &self.password_prompt {
             render_password_prompt(frame, area, prompt, self.palette);
+        }
+
+        // Help overlay.
+        if self.show_help {
+            render_help_overlay(frame, area, &self.keymap, self.palette);
         }
 
         // Crash-recovery prompt (highest priority overlay).
@@ -450,7 +458,7 @@ impl App {
         } else if self.focus == Focus::Grid && self.result_grid.is_editable() {
             " <Enter> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
         } else {
-            " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <Space>i import │ <C-q> quit "
+            " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <Space>i import │ <Space>? help "
         };
         let hint_span = Span::styled(hint, Style::default().fg(p.muted));
 
@@ -467,6 +475,12 @@ impl App {
         }
 
         tracing::debug!("key: {:?}, modifiers: {:?}", key.code, key.modifiers);
+
+        // Help overlay swallows keys until dismissed.
+        if self.show_help {
+            self.show_help = false;
+            return;
+        }
 
         // Crash-recovery prompt swallows keys until dismissed.
         if self.recovery.is_some() {
@@ -708,6 +722,7 @@ impl App {
                     self.emit_table_ddl();
                 }
             }
+            Action::Help => self.show_help = true,
         }
     }
 
@@ -2043,6 +2058,68 @@ fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousSt
     );
 }
 
+/// Render the help overlay: a cheatsheet built dynamically from the keymap,
+/// plus a static section for editor/modal keys not in the remappable map.
+fn render_help_overlay(frame: &mut Frame, area: Rect, keymap: &Keymap, p: Palette) {
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "Normal mode",
+        Style::default().fg(p.accent),
+    )));
+    for (chord, desc) in keymap.describe() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {chord:<10}"), Style::default().fg(p.accent_alt)),
+            Span::styled(desc.to_string(), Style::default().fg(p.foreground)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Editor",
+        Style::default().fg(p.accent),
+    )));
+    for (chord, desc) in [
+        ("i", "insert mode"),
+        ("<Esc>", "normal mode / close"),
+        ("<C-e>", "run query"),
+        ("<C-s>", "save buffer"),
+        ("<Tab>", "next buffer"),
+        ("<C-t>", "new buffer"),
+        ("<C-Space>", "autocomplete"),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {chord:<10}"), Style::default().fg(p.accent_alt)),
+            Span::styled(desc.to_string(), Style::default().fg(p.foreground)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "press any key to close",
+        Style::default().fg(p.muted),
+    )));
+
+    let width = (area.width as f32 * 0.6).clamp(30.0, 70.0) as u16;
+    let height = (lines.len() as u16 + 2).min(area.height.max(3));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(" Help ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(p.accent))
+                .style(Style::default().bg(p.background)),
+        ),
+        rect,
+    );
+}
+
 /// Render the interactive password prompt (input masked).
 fn render_password_prompt(frame: &mut Frame, area: Rect, prompt: &PasswordPrompt, p: Palette) {
     let masked: String = "*".repeat(prompt.input.chars().count());
@@ -2413,6 +2490,25 @@ mod tests {
         )));
         assert!(app.recovery.is_none());
         assert!(!app.editor_open);
+    }
+
+    #[test]
+    fn help_overlay_toggles_with_leader_question_and_any_key() {
+        let mut app = test_app();
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('?'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.show_help, "<Space>? should open help");
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('j'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.show_help, "any key should close help");
     }
 
     #[test]
