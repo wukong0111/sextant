@@ -85,13 +85,17 @@ pub fn to_sql_literal(value: &str) -> String {
     }
 }
 
-/// `UPDATE <table> SET ... WHERE <pk...>` keyed by the primary key.
+/// `UPDATE <table> SET ... WHERE <match...>`.
+///
+/// `where_cols` carries the original values used to locate the row: the primary
+/// key plus (for optimistic concurrency) the prior values of the edited
+/// columns, so a concurrent change makes the statement affect zero rows.
 pub fn build_update(
     driver: Driver,
     schema: &str,
     table: &str,
     set: &[(&str, &str)],
-    pk: &[(&str, &str)],
+    where_cols: &[(&str, &str)],
 ) -> String {
     let set_clause = set
         .iter()
@@ -102,7 +106,7 @@ pub fn build_update(
         "UPDATE {} SET {} WHERE {}",
         qualified_table(driver, schema, table),
         set_clause,
-        where_pk(driver, pk),
+        where_match(driver, where_cols),
     )
 }
 
@@ -126,18 +130,39 @@ pub fn build_insert(driver: Driver, schema: &str, table: &str, cols: &[(&str, &s
     )
 }
 
-/// `DELETE FROM <table> WHERE <pk...>` keyed by the primary key.
-pub fn build_delete(driver: Driver, schema: &str, table: &str, pk: &[(&str, &str)]) -> String {
+/// `DELETE FROM <table> WHERE <match...>`.
+///
+/// `where_cols` carries the original row values (primary key plus, for
+/// optimistic concurrency, the other columns) so a row changed concurrently is
+/// not deleted.
+pub fn build_delete(
+    driver: Driver,
+    schema: &str,
+    table: &str,
+    where_cols: &[(&str, &str)],
+) -> String {
     format!(
         "DELETE FROM {} WHERE {}",
         qualified_table(driver, schema, table),
-        where_pk(driver, pk),
+        where_match(driver, where_cols),
     )
 }
 
-fn where_pk(driver: Driver, pk: &[(&str, &str)]) -> String {
-    pk.iter()
-        .map(|(col, val)| format!("{} = {}", quote_ident(driver, col), to_sql_literal(val)))
+/// Build an `AND`-joined match clause from `(column, original_value)` pairs.
+///
+/// A `NULL` value (the sentinel produced by the grid for
+/// [`sextant_core::CellValue::Null`]) becomes `col IS NULL` rather than the
+/// never-matching `col = NULL`.
+fn where_match(driver: Driver, cols: &[(&str, &str)]) -> String {
+    cols.iter()
+        .map(|(col, val)| {
+            let ident = quote_ident(driver, col);
+            if *val == "NULL" {
+                format!("{ident} IS NULL")
+            } else {
+                format!("{ident} = {}", to_sql_literal(val))
+            }
+        })
         .collect::<Vec<_>>()
         .join(" AND ")
 }
@@ -312,6 +337,36 @@ mod tests {
     fn delete_statement_by_pk() {
         let sql = build_delete(Driver::Postgres, "public", "users", &[("id", "9")]);
         assert_eq!(sql, "DELETE FROM \"public\".\"users\" WHERE \"id\" = '9'");
+    }
+
+    #[test]
+    fn where_match_uses_is_null_for_null_values() {
+        // A NULL original value must compare with IS NULL, not `= NULL`.
+        let sql = build_delete(
+            Driver::Postgres,
+            "public",
+            "t",
+            &[("id", "5"), ("note", "NULL")],
+        );
+        assert_eq!(
+            sql,
+            "DELETE FROM \"public\".\"t\" WHERE \"id\" = '5' AND \"note\" IS NULL"
+        );
+    }
+
+    #[test]
+    fn update_with_null_original_in_where() {
+        let sql = build_update(
+            Driver::Sqlite,
+            "main",
+            "t",
+            &[("v", "x")],
+            &[("id", "1"), ("v", "NULL")],
+        );
+        assert_eq!(
+            sql,
+            "UPDATE \"main\".\"t\" SET \"v\" = 'x' WHERE \"id\" = '1' AND \"v\" IS NULL"
+        );
     }
 
     #[test]

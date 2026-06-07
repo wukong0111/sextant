@@ -329,6 +329,14 @@ impl ResultGrid {
                 .map(|(name, idx)| (name.clone(), cell_value_to_string(&result.rows[row][*idx])))
                 .collect()
         };
+        // Every column's original value for `row`, used as the full-row match in
+        // a DELETE's optimistic WHERE.
+        let original_row = |row: usize| -> Vec<(String, String)> {
+            cols.iter()
+                .enumerate()
+                .map(|(i, name)| (name.to_string(), cell_value_to_string(&result.rows[row][i])))
+                .collect()
+        };
 
         let mut stmts = Vec::new();
 
@@ -345,25 +353,34 @@ impl ResultGrid {
                 .iter()
                 .map(|&c| (cols[c].to_string(), self.edits[&(row, c)].clone()))
                 .collect();
-            let pk_owned = pk_values(row);
+            // Optimistic-concurrency WHERE: primary key plus the *original*
+            // values of the edited columns, so a concurrent change to any of
+            // them makes the UPDATE affect zero rows.
+            let mut where_owned = pk_values(row);
+            for &c in &ecols {
+                let name = cols[c].to_string();
+                if !where_owned.iter().any(|(n, _)| *n == name) {
+                    where_owned.push((name, cell_value_to_string(&result.rows[row][c])));
+                }
+            }
             stmts.push(sextant_db::build_update(
                 ctx.driver,
                 &ctx.schema,
                 &ctx.table,
                 &as_refs(&set_owned),
-                &as_refs(&pk_owned),
+                &as_refs(&where_owned),
             ));
         }
 
-        // DELETEs.
+        // DELETEs: match the full original row (optimistic concurrency).
         for &row in &self.deleted {
             if row < result.rows.len() {
-                let pk_owned = pk_values(row);
+                let where_owned = original_row(row);
                 stmts.push(sextant_db::build_delete(
                     ctx.driver,
                     &ctx.schema,
                     &ctx.table,
-                    &as_refs(&pk_owned),
+                    &as_refs(&where_owned),
                 ));
             }
         }
@@ -765,10 +782,11 @@ mod tests {
         assert!(g.has_pending());
 
         let stmts = g.build_commit_statements();
+        // Optimistic WHERE: PK plus the edited column's original value.
         assert_eq!(
             stmts,
             vec![
-                "UPDATE \"main\".\"users\" SET \"name\" = 'Alicia' WHERE \"id\" = '1'".to_string()
+                "UPDATE \"main\".\"users\" SET \"name\" = 'Alicia' WHERE \"id\" = '1' AND \"name\" = 'Alice'".to_string()
             ]
         );
     }
@@ -813,9 +831,13 @@ mod tests {
         g.mark_delete();
 
         let stmts = g.build_commit_statements();
+        // Optimistic WHERE: the full original row (id + name).
         assert_eq!(
             stmts,
-            vec!["DELETE FROM \"main\".\"users\" WHERE \"id\" = '2'".to_string()]
+            vec![
+                "DELETE FROM \"main\".\"users\" WHERE \"id\" = '2' AND \"name\" = 'Bob'"
+                    .to_string()
+            ]
         );
     }
 
