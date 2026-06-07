@@ -237,6 +237,11 @@ pub struct App {
     last_notice: Option<String>,
     last_query_duration: Option<Duration>,
     query_start: Option<Instant>,
+    /// Whether a background operation (query/connect/commit/import) is running,
+    /// driving a status-line spinner.
+    busy: bool,
+    /// Animation frame for the spinner, advanced on each tick.
+    spinner_frame: usize,
     focus: Focus,
     result_grid: ResultGrid,
     /// Resolved theme colors used across the UI.
@@ -297,6 +302,8 @@ impl App {
             last_notice: None,
             last_query_duration: None,
             query_start: None,
+            busy: false,
+            spinner_frame: 0,
             focus: Focus::Tree,
             result_grid,
             palette,
@@ -422,6 +429,17 @@ impl App {
             Span::raw("")
         };
 
+        // Spinner shown only while a background operation is running.
+        let spinner_span = if self.busy {
+            const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            Span::styled(
+                format!("{} ", FRAMES[self.spinner_frame % FRAMES.len()]),
+                Style::default().fg(p.accent),
+            )
+        } else {
+            Span::raw("")
+        };
+
         let error_span = if let Some(ref err) = self.last_error {
             Span::styled(format!(" ERR: {} │ ", err), Style::default().fg(p.error))
         } else if let Some(ref notice) = self.last_notice {
@@ -474,7 +492,14 @@ impl App {
         let hint_span = Span::styled(hint, Style::default().fg(p.muted));
 
         let status = Line::from(vec![
-            mode_span, conn_span, txn_span, error_span, stats_span, edit_span, hint_span,
+            mode_span,
+            conn_span,
+            spinner_span,
+            txn_span,
+            error_span,
+            stats_span,
+            edit_span,
+            hint_span,
         ]);
         let status_bar = Paragraph::new(status).style(Style::default().bg(p.background));
         frame.render_widget(status_bar, outer[1]);
@@ -955,6 +980,7 @@ impl App {
 
         self.tree.set_connecting(conn_idx);
         self.connection_name = Some(format!("{name} (connecting)"));
+        self.busy = true;
 
         let tx = tx.clone();
 
@@ -1013,6 +1039,20 @@ impl App {
     }
 
     fn handle_msg(&mut self, msg: AppMsg, tx: &UnboundedSender<AppMsg>) {
+        // Any terminal result clears the busy spinner.
+        if matches!(
+            msg,
+            AppMsg::Connected { .. }
+                | AppMsg::ConnectionFailed { .. }
+                | AppMsg::QueryResult(_)
+                | AppMsg::QueryError(_)
+                | AppMsg::CommitResult(_)
+                | AppMsg::ImportFinished(_)
+                | AppMsg::ExportFinished(_)
+        ) {
+            self.busy = false;
+        }
+
         match msg {
             AppMsg::Connected {
                 name,
@@ -1462,6 +1502,7 @@ impl App {
             return;
         };
         self.query_start = Some(Instant::now());
+        self.busy = true;
         let tx = tx.clone();
         let store = if record {
             self.state_store.clone()
@@ -1586,6 +1627,7 @@ impl App {
         let path = sextant_config::exports_dir()
             .join(format!("{stem}-{millis}.{ext}", ext = format.extension()));
 
+        self.busy = true;
         let tx = tx.clone();
         tokio::spawn(async move {
             let content = sextant_db::export::export(&result, format, driver, &table);
@@ -1729,6 +1771,7 @@ impl App {
             self.last_error = Some("import: not connected".into());
             return;
         };
+        self.busy = true;
         let tx = tx.clone();
         tokio::spawn(async move {
             let msg = match executor.execute_transaction(&pending.statements).await {
@@ -1917,6 +1960,7 @@ impl App {
         let Some(executor) = self.executors.get(&name).cloned() else {
             return;
         };
+        self.busy = true;
         let tx = tx.clone();
         tokio::spawn(async move {
             let result = executor
@@ -2020,7 +2064,10 @@ async fn run_async() -> io::Result<()> {
             }
             _ = tick.tick() => {
                 app.maybe_write_swap();
-                if app.editor_open {
+                if app.busy {
+                    app.spinner_frame = app.spinner_frame.wrapping_add(1);
+                    app.needs_redraw = true;
+                } else if app.editor_open {
                     app.needs_redraw = true;
                 }
             }
