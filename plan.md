@@ -13,7 +13,7 @@
 | Fase 0 — Cimentación | ✅ Completada | `7cdf1cb` (initial), `1c55742` (correcciones) |
 | Fase 1 — v0.1 MVP | ✅ Completada | `fbee360` (1.1 config), `6dfb9cf` (1.2 db), `6315a32` (1.3 sidebar), `aa94722` (1.4 editor), `3b14373` (1.5 grid), `afb16cc` (1.5 fixes), `9615337` (1.6 event loop), `53f57a7` (fix grid highlight + cursor), `4a2636e` (fix SQLite BOOLEAN) |
 | Fase 2 — v0.2 | ✅ Completada | `432d8df` (2.1 MySQL), `2778f89` (2.1 Docker tests + tipos), `ce9aa8d` (2.1 PG 18.4 / MySQL 9.7), `e576d47` (2.1 fix PG imagen), `4f8cd49` (2.1 conexiones Docker TUI), `8682aba` (2.1 fix passwords Docker), `b634a43` (2.1 fix .env + SQLite), `ae628b4` (2.1 fix MySQL introspection column names), `b4aae24` (2.1 Docker DB seeds), `91ea5c6` (2.1 SQLite seed + file conn), `b3d7e43` (2.1 untrack test.db), `e354de5` (2.1 rich type seeds), `207770b` (2.1 test schema cleanup), `76858c7` (chore: normalización fmt/clippy toolchain 1.96), `2de33b5` (base: introspección de columnas + PK + cache), `c826b0c` (base: quote_ident + DDL `CREATE TABLE`), `b8bc78f` (2.4 columnas en árbol + browse rows + DDL), `95b4427` (2.3 autocomplete), `aa662b0` (2.2 base: transacciones + DML gen), `4d7bfac` (2.2 grid editable CRUD), `bf1a892` (2.5 multi-buffer tabs), `f0c5232` (2.4 índices/FKs en árbol), `b7e6148` (2.5 guardado .sql + prompt al salir) |
-| Fase 3 — v1 | 🚧 En progreso | `d88ddc3` (3.2 query history + recent files), `96eea9f` (3.1 export CSV/JSON/SQL), `49a6871` (3.1 import core), `1111aeb` (3.1 import UI), `2a8a1e6` (3.3 transacciones + guard destructivo), `6468283` (3.4 themes), `23228bf` (3.4 keymap), `a391c65` (3.5 swap files + recovery) |
+| Fase 3 — v1 | 🚧 En progreso | `d88ddc3` (3.2 query history + recent files), `96eea9f` (3.1 export CSV/JSON/SQL), `49a6871` (3.1 import core), `1111aeb` (3.1 import UI), `2a8a1e6` (3.3 transacciones + guard destructivo), `6468283` (3.4 themes), `23228bf` (3.4 keymap), `a391c65` (3.5 swap files + recovery), `f4da375` (3.6 keyring) |
 
 ## Principios Directores
 
@@ -343,12 +343,19 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   quedan buffers dirty); el tick también lo borra si nada está dirty.
 - [x] ✅ Permisos `0600` (fichero) / `0700` (dir) vía `sextant-config::write_swap`.
 
-### 3.6 Credentials via Keyring
+### 3.6 Credentials via Keyring ✅ (`f4da375`)
 
-- Integrar `keyring` crate.
-- Al conectar, buscar password en keyring por `keyring_key`.
-- Fallback a prompt interactivo (popup en TUI) si no existe.
-- Guardar nueva credencial en keyring al guardar conexión.
+- [x] ✅ Integrar `keyring` crate (en `sextant-config`; servicio `"sextant"`,
+  `password_from_keyring`/`store_password_in_keyring`).
+- [x] ✅ Al conectar, buscar password en keyring por `keyring_key`; fallback a la
+  env-var `SEXTANT_<NAME>_PASSWORD` cuando no hay `keyring_key`.
+- [x] ✅ Fallback a prompt interactivo (popup enmascarado en la TUI) si la
+  conexión tiene `keyring_key` pero no hay secreto guardado (y no es SQLite).
+- [x] ✅ Guardar la credencial en el keyring tras un connect exitoso desde el
+  prompt. **Divergencia**: no hay flujo de "guardar conexión" en la app (las
+  conexiones se cargan de `connections.toml`), así que el guardado ocurre al
+  conectar correctamente con la password introducida, no al crear/editar una
+  conexión.
 
 ### 3.7 Polish Final
 
