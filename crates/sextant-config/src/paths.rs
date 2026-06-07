@@ -56,6 +56,26 @@ pub fn state_db_path() -> PathBuf {
     data_dir().join("state.db")
 }
 
+/// Returns the XDG state directory for sextant
+/// (`$XDG_STATE_HOME/sextant` or `~/.local/state/sextant`).
+fn state_dir() -> PathBuf {
+    let state = if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
+        PathBuf::from(xdg)
+    } else {
+        dirs::home_dir()
+            .expect("home directory must be available")
+            .join(".local")
+            .join("state")
+    };
+    state.join("sextant")
+}
+
+/// Returns the directory where editor swap files live
+/// (`$XDG_STATE_HOME/sextant/swap` or `~/.local/state/sextant/swap`).
+pub fn swap_dir() -> PathBuf {
+    state_dir().join("swap")
+}
+
 /// Resolve a user-provided query name to a path inside [`queries_dir`],
 /// appending a `.sql` extension when none is present.
 pub fn query_path(name: &str) -> PathBuf {

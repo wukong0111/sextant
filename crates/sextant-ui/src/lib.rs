@@ -26,6 +26,8 @@ use keymap::{Action, ChordState, KeySpec, Keymap};
 mod palette;
 use palette::Palette;
 
+mod swap;
+
 mod editor_modal;
 use editor_modal::{EditorAction, EditorModal};
 
@@ -114,6 +116,14 @@ struct ImportPrompt {
     path: String,
 }
 
+/// Orphan swap files found at startup, offered for crash recovery.
+struct Recovery {
+    /// All orphan swap files (deleted on restore or discard).
+    orphans: Vec<std::path::PathBuf>,
+    /// Buffers parsed from the newest orphan, to load on restore.
+    buffers: Vec<swap::SwapBuffer>,
+}
+
 /// A destructive editor statement awaiting confirmation before it runs.
 struct DangerousStmt {
     /// Connection whose executor will run the statement.
@@ -187,6 +197,12 @@ pub struct App {
     pending_import: Option<PendingImport>,
     /// Destructive editor statement awaiting confirmation, if any.
     pending_dangerous: Option<DangerousStmt>,
+    /// Orphan-swap recovery prompt shown at startup, if any.
+    recovery: Option<Recovery>,
+    /// This session's swap file path (`session-<pid>.swp`).
+    session_swap: std::path::PathBuf,
+    /// When the swap file was last written (throttles to ~30s).
+    last_swap: Instant,
     saved_buffers: std::collections::HashMap<String, String>,
     /// Column/PK metadata per connection, keyed by `(schema, table)`.
     table_meta: std::collections::HashMap<
@@ -246,6 +262,9 @@ impl App {
             import_prompt: None,
             pending_import: None,
             pending_dangerous: None,
+            recovery: None,
+            session_swap: swap::session_swap_path(),
+            last_swap: Instant::now(),
             saved_buffers: std::collections::HashMap::new(),
             table_meta: std::collections::HashMap::new(),
             last_result: None,
@@ -321,6 +340,11 @@ impl App {
         // Destructive-statement confirmation modal.
         if let Some(dangerous) = &self.pending_dangerous {
             render_dangerous_modal(frame, area, dangerous, self.palette);
+        }
+
+        // Crash-recovery prompt (highest priority overlay).
+        if let Some(recovery) = &self.recovery {
+            render_recovery_modal(frame, area, recovery, self.palette);
         }
 
         // Status line at the bottom.
@@ -422,6 +446,17 @@ impl App {
         }
 
         tracing::debug!("key: {:?}, modifiers: {:?}", key.code, key.modifiers);
+
+        // Crash-recovery prompt swallows keys until dismissed.
+        if self.recovery.is_some() {
+            match key.code {
+                KeyCode::Char('r') => self.restore_recovery(),
+                KeyCode::Char('d') => self.discard_recovery(),
+                KeyCode::Esc => self.recovery = None,
+                _ => {}
+            }
+            return;
+        }
 
         // Save-as filename prompt swallows keys until confirmed/cancelled.
         if self.save_prompt.is_some() {
@@ -1036,6 +1071,10 @@ impl App {
                 self.editor.mark_saved();
                 self.last_error = None;
                 self.record_recent_file(path);
+                // Once nothing is dirty, the swap file is no longer needed.
+                if !self.editor.any_dirty() {
+                    swap::remove(&self.session_swap);
+                }
             }
             Err(e) => {
                 self.last_error = Some(format!("save failed: {e}"));
@@ -1077,6 +1116,63 @@ impl App {
             return;
         };
         self.execute_editor_sql(d.conn, d.sql, tx);
+    }
+
+    /// Scan the swap directory for orphan files (from a crashed session) and, if
+    /// the newest holds buffers, stage a recovery prompt.
+    fn scan_for_recovery(&mut self) {
+        let orphans = swap::find_orphans();
+        let Some(newest) = orphans.first() else {
+            return;
+        };
+        if let Some(doc) = swap::read(newest) {
+            if !doc.buffers.is_empty() {
+                self.recovery = Some(Recovery {
+                    orphans,
+                    buffers: doc.buffers,
+                });
+            }
+        }
+    }
+
+    /// Restore recovered buffers into the editor and delete the orphan swaps.
+    fn restore_recovery(&mut self) {
+        let Some(rec) = self.recovery.take() else {
+            return;
+        };
+        self.open_editor();
+        self.editor.restore_buffers(rec.buffers);
+        for path in &rec.orphans {
+            swap::remove(path);
+        }
+    }
+
+    /// Discard the recovery offer and delete the orphan swap files.
+    fn discard_recovery(&mut self) {
+        let Some(rec) = self.recovery.take() else {
+            return;
+        };
+        for path in &rec.orphans {
+            swap::remove(path);
+        }
+    }
+
+    /// Write a swap file for the dirty buffers, throttled to ~30s. When nothing
+    /// is dirty, remove any existing swap (so a clean editor leaves none behind).
+    fn maybe_write_swap(&mut self) {
+        if self.last_swap.elapsed() < Duration::from_secs(30) {
+            return;
+        }
+        self.last_swap = Instant::now();
+        let dirty = self.editor.dirty_snapshot();
+        if dirty.is_empty() {
+            swap::remove(&self.session_swap);
+            return;
+        }
+        let doc = swap::SwapDoc { buffers: dirty };
+        if let Err(e) = sextant_config::write_swap(&self.session_swap, &swap::serialize(&doc)) {
+            tracing::warn!("swap write failed: {e}");
+        }
     }
 
     /// Spawn a query against the named connection's executor; the result is
@@ -1622,6 +1718,10 @@ async fn run_async() -> io::Result<()> {
         Err(e) => tracing::warn!("state store unavailable: {e}"),
     }
 
+    // Offer to recover buffers from any swap files left by a crashed session.
+    // (Done here, not in `App::new`, so unit tests never touch the real FS.)
+    app.scan_for_recovery();
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppMsg>();
     let mut event_stream = crossterm::event::EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(250));
@@ -1655,6 +1755,7 @@ async fn run_async() -> io::Result<()> {
                 app.needs_redraw = true;
             }
             _ = tick.tick() => {
+                app.maybe_write_swap();
                 if app.editor_open {
                     app.needs_redraw = true;
                 }
@@ -1665,6 +1766,9 @@ async fn run_async() -> io::Result<()> {
             break;
         }
     }
+
+    // Clean exit: drop this session's swap file so it isn't seen as an orphan.
+    swap::remove(&app.session_swap);
 
     restore_terminal(&mut terminal)?;
     Ok(())
@@ -1830,6 +1934,27 @@ fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousSt
             )),
             Line::from(Span::styled(
                 "<Enter>/y run   <Esc>/n cancel",
+                Style::default().fg(p.muted),
+            )),
+        ],
+        p,
+    );
+}
+
+/// Render the crash-recovery prompt.
+fn render_recovery_modal(frame: &mut Frame, area: Rect, recovery: &Recovery, p: Palette) {
+    let n = recovery.buffers.len();
+    render_centered_modal(
+        frame,
+        area,
+        "Recover unsaved work",
+        vec![
+            Line::from(Span::styled(
+                format!("Found {n} unsaved buffer(s) from a previous session."),
+                Style::default().fg(p.foreground),
+            )),
+            Line::from(Span::styled(
+                "r restore │ d discard │ <Esc> ignore",
                 Style::default().fg(p.muted),
             )),
         ],
@@ -2129,6 +2254,42 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(!app.should_quit);
+    }
+
+    fn one_buffer_recovery(content: &str) -> Recovery {
+        Recovery {
+            orphans: vec![],
+            buffers: vec![swap::SwapBuffer {
+                path: None,
+                cursor: (0, 0),
+                content: content.to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn recovery_restore_loads_buffers_into_editor() {
+        let mut app = test_app();
+        app.recovery = Some(one_buffer_recovery("SELECT 99"));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.recovery.is_none());
+        assert!(app.editor_open, "restore should open the editor");
+        assert_eq!(app.editor.content(), "SELECT 99");
+    }
+
+    #[test]
+    fn recovery_discard_clears_prompt_without_opening_editor() {
+        let mut app = test_app();
+        app.recovery = Some(one_buffer_recovery("x"));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.recovery.is_none());
+        assert!(!app.editor_open);
     }
 
     #[test]

@@ -13,6 +13,7 @@ use tui_textarea::TextArea;
 
 use crate::autocomplete::{self, SchemaIndex};
 use crate::palette::Palette;
+use crate::swap::SwapBuffer;
 
 /// State of an active autocomplete popup.
 struct Completion {
@@ -484,6 +485,48 @@ impl EditorModal {
     /// Mark the active buffer as saved (clears the dirty flag).
     pub fn mark_saved(&mut self) {
         self.active_mut().dirty = false;
+    }
+
+    /// Snapshot every dirty buffer for a swap file (content, cursor, bound path).
+    pub fn dirty_snapshot(&self) -> Vec<SwapBuffer> {
+        self.buffers
+            .iter()
+            .filter(|b| b.dirty)
+            .map(|b| {
+                let (row, col) = b.textarea.cursor();
+                SwapBuffer {
+                    path: b.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    cursor: (row, col),
+                    content: b.textarea.lines().join("\n"),
+                }
+            })
+            .collect()
+    }
+
+    /// Replace all buffers with recovered swap buffers (marked dirty, since they
+    /// were never saved), restoring each cursor position.
+    pub fn restore_buffers(&mut self, buffers: Vec<SwapBuffer>) {
+        if buffers.is_empty() {
+            return;
+        }
+        self.buffers = buffers
+            .into_iter()
+            .map(|s| {
+                let lines: Vec<String> = s.content.lines().map(|l| l.to_string()).collect();
+                let mut textarea = styled_textarea(lines);
+                textarea.move_cursor(tui_textarea::CursorMove::Jump(
+                    s.cursor.0 as u16,
+                    s.cursor.1 as u16,
+                ));
+                Buffer {
+                    textarea,
+                    dirty: true,
+                    path: s.path.map(PathBuf::from),
+                }
+            })
+            .collect();
+        self.active = 0;
+        self.completion = None;
     }
 }
 

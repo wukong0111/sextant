@@ -62,6 +62,17 @@ pub fn themes_dir() -> std::path::PathBuf {
     paths::themes_dir()
 }
 
+/// Return the directory where editor swap files live.
+pub fn swap_dir() -> std::path::PathBuf {
+    paths::swap_dir()
+}
+
+/// Write an editor swap file with restrictive permissions (`0700` dir, `0600`
+/// file), matching the security model for unencrypted query text on disk.
+pub fn write_swap(path: &Path, content: &str) -> Result<(), SextantError> {
+    write_secure(path, content)
+}
+
 /// Return the directory where exported result sets are written.
 pub fn exports_dir() -> std::path::PathBuf {
     paths::exports_dir()
