@@ -15,7 +15,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{CTRL_Q, ENTER, Fixture};
+use common::{CTRL_Q, ENTER, Fixture, SPACE};
 
 /// Boot → connect → open editor: a quick tour of the main surfaces.
 #[test]
@@ -63,6 +63,24 @@ fn screenshot_grid_focus_status_line() {
     tui.wait_for("2 rows", Duration::from_secs(10));
     tui.dump("GRID FOCUSED (edit hints + help hint must both show)");
 
+    tui.send(CTRL_Q);
+    let _ = tui.wait_exit(Duration::from_secs(5));
+}
+
+/// Press the leader alone so the which-key popup renders: the armed-mode signal.
+#[test]
+#[ignore = "manual smoke screenshot; run with --ignored --nocapture"]
+fn screenshot_which_key_menu() {
+    let fx = Fixture::sqlite("smoke-whichkey");
+    let mut tui = fx.spawn();
+
+    tui.wait_for("smoke-whichkey", Duration::from_secs(10));
+    tui.send(SPACE); // arm the leader, no second key
+    tui.wait_for("open SQL editor", Duration::from_secs(10));
+    tui.dump("WHICH-KEY MENU (leader armed)");
+
+    tui.type_str("e"); // complete the chord; menu disappears
+    tui.esc();
     tui.send(CTRL_Q);
     let _ = tui.wait_exit(Duration::from_secs(5));
 }

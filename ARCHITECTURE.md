@@ -163,8 +163,9 @@ These are the things that bite you if you don't know them.
   it in `App::handle_msg`. If background work produces it, send it on the `tx`
   cloned into the spawned task.
 
-- **A keybinding:** add a branch in `App::handle_key_event` (mind the current
-  `Mode`/`Focus` and `pending_leader`/`pending_g` chord state). Document it in
+- **A keybinding:** add the chord → `Action` mapping in `Keymap::defaults`
+  (`keymap.rs`) and dispatch the `Action` in `App::dispatch` (mind the current
+  `Mode`/`Focus`); multi-key chords resolve through `ChordState`. Document it in
   `SPEC.md` §12 (interaction model / default keymap).
 
 - **A driver capability:** enable the `sqlx` feature in the workspace

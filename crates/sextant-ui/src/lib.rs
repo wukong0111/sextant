@@ -424,6 +424,19 @@ impl App {
             render_recovery_modal(frame, area, recovery, self.palette);
         }
 
+        // Which-key menu: when the leader is armed, show the keys that can
+        // continue the chord. Ordinary prefixes (`g`, `d`) get only the
+        // status-line echo below, not a popup.
+        if let [first, ..] = self.chord.pending() {
+            if first.is_leader() {
+                let entries = self.keymap.continuations(self.chord.pending());
+                if !entries.is_empty() {
+                    let title = self.chord.pending_display().unwrap_or_default();
+                    render_whichkey_menu(frame, area, &title, &entries, self.palette);
+                }
+            }
+        }
+
         // Status line at the bottom.
         let p = self.palette;
         let mode_span = Span::styled(
@@ -436,6 +449,17 @@ impl App {
                     p.accent_alt
                 }),
         );
+
+        // Pending-chord echo: the leader gets the which-key popup (rendered
+        // above), so the status line only echoes ordinary prefixes (`g`, `d`)
+        // — a lightweight "the mode is armed" signal.
+        let chord_span = match self.chord.pending() {
+            [first, ..] if !first.is_leader() => {
+                let display = self.chord.pending_display().unwrap_or_default();
+                Span::styled(format!(" {display}… "), Style::default().fg(p.accent_alt))
+            }
+            _ => Span::raw(""),
+        };
 
         let conn_span = Span::styled(
             format!(
@@ -523,6 +547,7 @@ impl App {
 
         let status = Line::from(vec![
             mode_span,
+            chord_span,
             conn_span,
             spinner_span,
             txn_span,
@@ -2528,6 +2553,57 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, keymap: &Keymap, p: Palett
         Paragraph::new(lines).block(
             Block::default()
                 .title(" Help ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(p.accent))
+                .style(Style::default().bg(p.background)),
+        ),
+        rect,
+    );
+}
+
+/// Render the which-key popup for an armed leader chord: a small box anchored
+/// to the bottom-left (just above the status line) listing the keys that can
+/// continue the chord and the action each triggers.
+fn render_whichkey_menu(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    entries: &[(String, &'static str)],
+    p: Palette,
+) {
+    let lines: Vec<Line> = entries
+        .iter()
+        .map(|(k, desc)| {
+            Line::from(vec![
+                Span::styled(format!(" {k:<3}"), Style::default().fg(p.accent_alt)),
+                Span::styled((*desc).to_string(), Style::default().fg(p.foreground)),
+            ])
+        })
+        .collect();
+
+    // Width fits the longest "key + description" row; height fits all entries
+    // plus the border, clamped to the available area.
+    let inner_w = entries
+        .iter()
+        .map(|(_, desc)| desc.chars().count() + 5)
+        .max()
+        .unwrap_or(0);
+    let width = ((inner_w as u16) + 2).clamp(12, area.width.max(12));
+    let height = ((lines.len() as u16) + 2).min(area.height.max(3));
+    // Bottom-left, sitting just above the one-row status line.
+    let x = area.x;
+    let y = area.y + area.height.saturating_sub(height + 1);
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!(" {title} "))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(p.accent))
                 .style(Style::default().bg(p.background)),
