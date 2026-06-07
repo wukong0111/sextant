@@ -12,6 +12,8 @@ use ratatui::{
 use tui_textarea::TextArea;
 
 use crate::autocomplete::{self, SchemaIndex};
+use crate::palette::Palette;
+use crate::swap::SwapBuffer;
 
 /// State of an active autocomplete popup.
 struct Completion {
@@ -76,6 +78,8 @@ pub struct EditorModal {
     index: SchemaIndex,
     /// Active autocomplete popup, if any.
     completion: Option<Completion>,
+    /// Colors for borders, tabs, cursor and the completion popup.
+    palette: Palette,
 }
 
 impl Default for EditorModal {
@@ -92,7 +96,13 @@ impl EditorModal {
             active: 0,
             index: SchemaIndex::new(),
             completion: None,
+            palette: Palette::default(),
         }
+    }
+
+    /// Set the color palette used when rendering.
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
     }
 
     fn active(&self) -> &Buffer {
@@ -155,6 +165,8 @@ impl EditorModal {
         let tab_area = chunks[0];
         let editor_area = chunks[1];
 
+        let p = self.palette;
+
         // Tab bar: one chip per buffer, with `●` for unsaved changes.
         let mut spans = Vec::new();
         for (i, buf) in self.buffers.iter().enumerate() {
@@ -166,18 +178,28 @@ impl EditorModal {
                 .unwrap_or_else(|| format!("{}", i + 1));
             let label = format!(" {}{} ", name, if buf.dirty { "●" } else { "" });
             let style = if i == self.active {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default().fg(p.selection_fg).bg(p.selection_bg)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(p.muted)
             };
             spans.push(Span::styled(label, style));
         }
         frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Black)),
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(p.background)),
             tab_area,
         );
 
-        frame.render_widget(&self.active().textarea, editor_area);
+        // Apply the theme to the active textarea, then render it.
+        let textarea = &mut self.buffers[self.active].textarea;
+        textarea.set_block(
+            Block::default()
+                .title(" SQL Editor ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(p.accent)),
+        );
+        textarea.set_style(Style::default().fg(p.foreground).bg(p.background));
+        textarea.set_cursor_style(Style::default().fg(p.accent_alt));
+        frame.render_widget(&self.buffers[self.active].textarea, editor_area);
         self.render_completion(frame, editor_area, area);
     }
 
@@ -213,15 +235,16 @@ impl EditorModal {
             height,
         };
 
+        let p = self.palette;
         let items: Vec<ListItem> = comp
             .candidates
             .iter()
             .enumerate()
             .map(|(i, c)| {
                 let style = if i == comp.selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default().fg(p.selection_fg).bg(p.selection_bg)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(p.foreground)
                 };
                 ListItem::new(c.clone()).style(style)
             })
@@ -232,8 +255,8 @@ impl EditorModal {
             List::new(items).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .style(Style::default().bg(Color::Black)),
+                    .border_style(Style::default().fg(p.accent))
+                    .style(Style::default().bg(p.background)),
             ),
             popup,
         );
@@ -444,6 +467,13 @@ impl EditorModal {
         self.active().textarea.lines().join("\n")
     }
 
+    /// Insert text at the active buffer's cursor (used for snippet insertion).
+    pub fn insert_str(&mut self, text: &str) {
+        let buf = self.active_mut();
+        buf.textarea.insert_str(text);
+        buf.dirty = true;
+    }
+
     /// Replace the active buffer's content.
     pub fn set_content(&mut self, text: &str) {
         let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
@@ -462,6 +492,48 @@ impl EditorModal {
     /// Mark the active buffer as saved (clears the dirty flag).
     pub fn mark_saved(&mut self) {
         self.active_mut().dirty = false;
+    }
+
+    /// Snapshot every dirty buffer for a swap file (content, cursor, bound path).
+    pub fn dirty_snapshot(&self) -> Vec<SwapBuffer> {
+        self.buffers
+            .iter()
+            .filter(|b| b.dirty)
+            .map(|b| {
+                let (row, col) = b.textarea.cursor();
+                SwapBuffer {
+                    path: b.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    cursor: (row, col),
+                    content: b.textarea.lines().join("\n"),
+                }
+            })
+            .collect()
+    }
+
+    /// Replace all buffers with recovered swap buffers (marked dirty, since they
+    /// were never saved), restoring each cursor position.
+    pub fn restore_buffers(&mut self, buffers: Vec<SwapBuffer>) {
+        if buffers.is_empty() {
+            return;
+        }
+        self.buffers = buffers
+            .into_iter()
+            .map(|s| {
+                let lines: Vec<String> = s.content.lines().map(|l| l.to_string()).collect();
+                let mut textarea = styled_textarea(lines);
+                textarea.move_cursor(tui_textarea::CursorMove::Jump(
+                    s.cursor.0 as u16,
+                    s.cursor.1 as u16,
+                ));
+                Buffer {
+                    textarea,
+                    dirty: true,
+                    path: s.path.map(PathBuf::from),
+                }
+            })
+            .collect();
+        self.active = 0;
+        self.completion = None;
     }
 }
 

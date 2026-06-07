@@ -1,4 +1,5 @@
 use std::io::{self, Stdout, stdout};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -11,7 +12,7 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -19,6 +20,17 @@ use sextant_core::QueryExecutor;
 use tokio::sync::mpsc::UnboundedSender;
 
 mod autocomplete;
+
+mod keymap;
+use keymap::{Action, ChordState, KeySpec, Keymap};
+
+mod fuzzy;
+use fuzzy::{FuzzyAction, FuzzyItem, FuzzyPicker};
+
+mod palette;
+use palette::Palette;
+
+mod swap;
 
 mod editor_modal;
 use editor_modal::{EditorAction, EditorModal};
@@ -64,8 +76,104 @@ pub enum AppMsg {
     ToggleEditor,
     /// A key event targeted at the editor.
     EditorKey(KeyEvent),
+    /// Query history loaded from the state store (for the history picker).
+    HistoryLoaded(Vec<sextant_state::HistoryEntry>),
+    /// Recent files loaded from the state store (for the recent-files picker).
+    RecentFilesLoaded(Vec<sextant_state::FileEntry>),
+    /// Snippets loaded from the state store (for the snippet picker).
+    SnippetsLoaded(Vec<sextant_state::Snippet>),
+    /// A snippet was saved (the snippet name), or an error.
+    SnippetSaved(Result<String, String>),
+    /// An export finished: the written path, or an error message.
+    ExportFinished(Result<std::path::PathBuf, String>),
+    /// An import finished: rows affected, or an error message.
+    ImportFinished(Result<u64, String>),
     /// Quit the application.
     Quit,
+}
+
+/// A modal list picker (query history or recent files).
+struct Picker {
+    title: String,
+    items: Vec<PickerItem>,
+    selected: usize,
+}
+
+/// A single selectable row in a [`Picker`].
+struct PickerItem {
+    label: String,
+    action: PickerAction,
+}
+
+/// What selecting a [`PickerItem`] does.
+enum PickerAction {
+    /// Load SQL text into the editor.
+    LoadSql(String),
+    /// Read a `.sql` file from disk and load it into the editor.
+    OpenFile(std::path::PathBuf),
+    /// Export the current result set in the chosen format.
+    Export(sextant_db::ExportFormat),
+}
+
+/// An import in progress: the chosen target table and the file path being typed.
+struct ImportPrompt {
+    conn: String,
+    schema: String,
+    table: String,
+    driver: sextant_core::Driver,
+    path: String,
+}
+
+/// Orphan swap files found at startup, offered for crash recovery.
+struct Recovery {
+    /// All orphan swap files (deleted on restore or discard).
+    orphans: Vec<std::path::PathBuf>,
+    /// Buffers parsed from the newest orphan, to load on restore.
+    buffers: Vec<swap::SwapBuffer>,
+}
+
+/// An interactive password prompt shown when a connection's secret is not in
+/// the keyring. On submit the password is tried and, on success, stored.
+struct PasswordPrompt {
+    /// Connection name being connected.
+    name: String,
+    /// Index of the connection in the tree.
+    conn_idx: usize,
+    /// Keyring key to store the password under on success.
+    keyring_key: String,
+    /// The password typed so far (rendered masked).
+    input: String,
+}
+
+/// A password entered at the prompt, awaiting a successful connection before it
+/// is persisted to the credential store (§3.2 "save after connect").
+struct PendingCredential {
+    /// Connection whose success triggers the save.
+    name: String,
+    /// Key to store the password under.
+    keyring_key: String,
+    /// The password to persist.
+    password: String,
+}
+
+/// A destructive editor statement awaiting confirmation before it runs.
+struct DangerousStmt {
+    /// Connection whose executor will run the statement.
+    conn: String,
+    /// The SQL to run on confirmation.
+    sql: String,
+    /// Why it was flagged (shown in the modal).
+    reason: &'static str,
+}
+
+/// A parsed import awaiting confirmation in a modal.
+struct PendingImport {
+    /// Connection whose executor runs the statements.
+    conn: String,
+    /// Human-readable summary lines for the confirm modal.
+    summary: Vec<String>,
+    /// Statements to run in a single transaction.
+    statements: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,10 +207,10 @@ pub struct App {
     executors: std::collections::HashMap<String, sextant_db::SqlxExecutor>,
     editor_open: bool,
     editor: EditorModal,
-    pending_leader: bool,
-    pending_g: bool,
-    /// Pending `d` of a `dd` (delete-row) chord in the grid.
-    pending_d: bool,
+    /// Remappable Normal-mode bindings (defaults + `keys.toml`).
+    keymap: Keymap,
+    /// In-progress key chord for multi-key bindings (`gg`, `<Space>e`, …).
+    chord: ChordState,
     /// Pending grid-commit statements awaiting confirmation.
     pending_commit: Option<Vec<String>>,
     /// SQL used for the current browse, replayed to refresh after a commit.
@@ -111,6 +219,34 @@ pub struct App {
     save_prompt: Option<String>,
     /// Whether the quit-with-unsaved-buffers prompt is showing.
     quit_prompt: bool,
+    /// Local state store (query history + recent files); `None` if unavailable.
+    state_store: Option<sextant_state::StateStore>,
+    /// Active modal list picker (history / recent files), if any.
+    picker: Option<Picker>,
+    /// Active import file-path prompt, if any.
+    import_prompt: Option<ImportPrompt>,
+    /// Parsed import awaiting confirmation, if any.
+    pending_import: Option<PendingImport>,
+    /// Destructive editor statement awaiting confirmation, if any.
+    pending_dangerous: Option<DangerousStmt>,
+    /// Whether the help overlay (cheatsheet) is showing.
+    show_help: bool,
+    /// Active fuzzy picker (command palette / find table / open file), if any.
+    fuzzy: Option<FuzzyPicker>,
+    /// Snippet-name prompt (saving the current buffer as a snippet), if active.
+    snippet_prompt: Option<String>,
+    /// Interactive password prompt, if a connection needs one.
+    password_prompt: Option<PasswordPrompt>,
+    /// Credential store (OS keyring in production; injectable in tests).
+    credentials: Arc<dyn sextant_core::CredentialStore>,
+    /// Password entered at the prompt, pending a successful connection to save.
+    pending_credential: Option<PendingCredential>,
+    /// Orphan-swap recovery prompt shown at startup, if any.
+    recovery: Option<Recovery>,
+    /// This session's swap file path (`session-<pid>.swp`).
+    session_swap: std::path::PathBuf,
+    /// When the swap file was last written (throttles to ~30s).
+    last_swap: Instant,
     saved_buffers: std::collections::HashMap<String, String>,
     /// Column/PK metadata per connection, keyed by `(schema, table)`.
     table_meta: std::collections::HashMap<
@@ -119,10 +255,19 @@ pub struct App {
     >,
     last_result: Option<sextant_core::QueryResult>,
     last_error: Option<String>,
+    /// Transient success notice shown in the status line (e.g. export path).
+    last_notice: Option<String>,
     last_query_duration: Option<Duration>,
     query_start: Option<Instant>,
+    /// Whether a background operation (query/connect/commit/import) is running,
+    /// driving a status-line spinner.
+    busy: bool,
+    /// Animation frame for the spinner, advanced on each tick.
+    spinner_frame: usize,
     focus: Focus,
     result_grid: ResultGrid,
+    /// Resolved theme colors used across the UI.
+    palette: Palette,
     needs_redraw: bool,
 }
 
@@ -133,7 +278,18 @@ impl App {
             vec![]
         });
         let names: Vec<String> = connections.iter().map(|c| c.name.clone()).collect();
-        let tree = TreePane::new(names);
+
+        // Resolve the configured theme into concrete colors, then seed every
+        // widget with it (a single global palette; no runtime switching yet).
+        let palette = Palette::from_theme(&sextant_config::load_theme());
+        let mut tree = TreePane::new(names);
+        tree.set_palette(palette);
+        let mut editor = EditorModal::new();
+        editor.set_palette(palette);
+        let mut result_grid = ResultGrid::new();
+        result_grid.set_palette(palette);
+
+        let keymap = Keymap::with_user_bindings(&sextant_config::load_keybindings());
 
         Ok(Self {
             mode: Mode::Normal,
@@ -143,22 +299,39 @@ impl App {
             connection_configs: connections,
             executors: std::collections::HashMap::new(),
             editor_open: false,
-            editor: EditorModal::new(),
-            pending_leader: false,
-            pending_g: false,
-            pending_d: false,
+            editor,
+            keymap,
+            chord: ChordState::default(),
             pending_commit: None,
             last_browse_sql: None,
             save_prompt: None,
             quit_prompt: false,
+            state_store: None,
+            picker: None,
+            import_prompt: None,
+            pending_import: None,
+            pending_dangerous: None,
+            show_help: false,
+            fuzzy: None,
+            snippet_prompt: None,
+            password_prompt: None,
+            credentials: Arc::new(sextant_config::KeyringStore),
+            pending_credential: None,
+            recovery: None,
+            session_swap: swap::session_swap_path(),
+            last_swap: Instant::now(),
             saved_buffers: std::collections::HashMap::new(),
             table_meta: std::collections::HashMap::new(),
             last_result: None,
             last_error: None,
+            last_notice: None,
             last_query_duration: None,
             query_start: None,
+            busy: false,
+            spinner_frame: 0,
             focus: Focus::Tree,
-            result_grid: ResultGrid::new(),
+            result_grid,
+            palette,
             needs_redraw: true,
         })
     }
@@ -193,38 +366,114 @@ impl App {
 
         // Commit-confirmation modal (floating overlay).
         if let Some(statements) = &self.pending_commit {
-            render_commit_modal(frame, area, statements);
+            render_commit_modal(frame, area, statements, self.palette);
         }
 
         // Save-as filename prompt.
         if let Some(name) = &self.save_prompt {
-            render_save_prompt(frame, area, name);
+            render_save_prompt(frame, area, name, self.palette);
+        }
+
+        // Snippet-name prompt.
+        if let Some(name) = &self.snippet_prompt {
+            render_snippet_prompt(frame, area, name, self.palette);
         }
 
         // Quit-with-unsaved-buffers prompt.
         if self.quit_prompt {
-            render_quit_prompt(frame, area);
+            render_quit_prompt(frame, area, self.palette);
+        }
+
+        // Modal list picker (history / recent files).
+        if let Some(picker) = &self.picker {
+            render_picker(frame, area, picker, self.palette);
+        }
+
+        // Import file-path prompt.
+        if let Some(prompt) = &self.import_prompt {
+            render_import_prompt(frame, area, prompt, self.palette);
+        }
+
+        // Import confirmation modal.
+        if let Some(pending) = &self.pending_import {
+            render_import_modal(frame, area, pending, self.palette);
+        }
+
+        // Destructive-statement confirmation modal.
+        if let Some(dangerous) = &self.pending_dangerous {
+            render_dangerous_modal(frame, area, dangerous, self.palette);
+        }
+
+        // Password prompt.
+        if let Some(prompt) = &self.password_prompt {
+            render_password_prompt(frame, area, prompt, self.palette);
+        }
+
+        // Fuzzy picker (command palette / find table / open file).
+        if let Some(fuzzy) = &self.fuzzy {
+            render_fuzzy_picker(frame, area, fuzzy, self.palette);
+        }
+
+        // Help overlay.
+        if self.show_help {
+            render_help_overlay(frame, area, &self.keymap, self.palette);
+        }
+
+        // Crash-recovery prompt (highest priority overlay).
+        if let Some(recovery) = &self.recovery {
+            render_recovery_modal(frame, area, recovery, self.palette);
         }
 
         // Status line at the bottom.
+        let p = self.palette;
         let mode_span = Span::styled(
             format!(" {} ", self.mode),
             Style::default()
-                .fg(Color::Black)
+                .fg(p.background)
                 .bg(if self.mode == Mode::Normal {
-                    Color::Cyan
+                    p.accent
                 } else {
-                    Color::Yellow
+                    p.accent_alt
                 }),
         );
 
-        let conn_span = Span::raw(format!(
-            " {} ",
-            self.connection_name.as_deref().unwrap_or("no connection")
-        ));
+        let conn_span = Span::styled(
+            format!(
+                " {} ",
+                self.connection_name.as_deref().unwrap_or("no connection")
+            ),
+            Style::default().fg(p.foreground),
+        );
+
+        // Transaction indicator: only an open session transaction is flagged.
+        // Autocommit is the implicit default and shows nothing, which keeps the
+        // status line within its width budget.
+        let txn_active = self
+            .connection_name
+            .as_deref()
+            .and_then(|name| self.executors.get(name))
+            .is_some_and(|exec| exec.in_transaction());
+        let txn_span = if txn_active {
+            Span::styled("txn: ACTIVE ", Style::default().fg(p.accent_alt))
+        } else {
+            Span::raw("")
+        };
+
+        // Spinner shown only while a background operation is running.
+        let spinner_span = if self.busy {
+            const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            Span::styled(
+                format!("{} ", FRAMES[self.spinner_frame % FRAMES.len()]),
+                Style::default().fg(p.accent),
+            )
+        } else {
+            Span::raw("")
+        };
 
         let error_span = if let Some(ref err) = self.last_error {
-            Span::styled(format!(" ERR: {} │ ", err), Style::default().fg(Color::Red))
+            Span::styled(format!(" ERR: {} │ ", err), Style::default().fg(p.error))
+        } else if let Some(ref notice) = self.last_notice {
+            Span::styled(format!(" {} │ ", notice), Style::default().fg(p.success))
         } else {
             Span::raw("")
         };
@@ -235,7 +484,10 @@ impl App {
                 .last_query_duration
                 .map(|d| format!("{}ms", d.as_millis()))
                 .unwrap_or_else(|| "-".into());
-            Span::raw(format!(" {rows} rows / {dur} │ "))
+            Span::styled(
+                format!(" {rows} rows / {dur} │ "),
+                Style::default().fg(p.foreground),
+            )
         } else {
             Span::raw(" ")
         };
@@ -243,11 +495,11 @@ impl App {
         // Editability / pending-changes indicator.
         let edit_span = if self.result_grid.result().is_some() {
             if !self.result_grid.is_editable() {
-                Span::styled("🔒 │ ", Style::default().fg(Color::DarkGray))
+                Span::styled("🔒 │ ", Style::default().fg(p.muted))
             } else if self.result_grid.has_pending() {
                 Span::styled(
                     format!("✎ {} pending │ ", self.result_grid.pending_count()),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(p.accent_alt),
                 )
             } else {
                 Span::raw("")
@@ -265,14 +517,21 @@ impl App {
         } else if self.focus == Focus::Grid && self.result_grid.is_editable() {
             " <Enter> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
         } else {
-            " <Space>e editor │ <C-q> quit "
+            " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <Space>i import │ <Space>? help "
         };
-        let hint_span = Span::styled(hint, Style::default().fg(Color::DarkGray));
+        let hint_span = Span::styled(hint, Style::default().fg(p.muted));
 
         let status = Line::from(vec![
-            mode_span, conn_span, error_span, stats_span, edit_span, hint_span,
+            mode_span,
+            conn_span,
+            spinner_span,
+            txn_span,
+            error_span,
+            stats_span,
+            edit_span,
+            hint_span,
         ]);
-        let status_bar = Paragraph::new(status).style(Style::default().bg(Color::Black));
+        let status_bar = Paragraph::new(status).style(Style::default().bg(p.background));
         frame.render_widget(status_bar, outer[1]);
     }
 
@@ -282,6 +541,72 @@ impl App {
         }
 
         tracing::debug!("key: {:?}, modifiers: {:?}", key.code, key.modifiers);
+
+        // Help overlay swallows keys until dismissed.
+        if self.show_help {
+            self.show_help = false;
+            return;
+        }
+
+        // Fuzzy picker (command palette / find table / open file) captures keys:
+        // characters edit the query; navigation is via arrows or Ctrl-n/Ctrl-p.
+        if self.fuzzy.is_some() {
+            match key.code {
+                KeyCode::Esc => self.fuzzy = None,
+                KeyCode::Enter => self.fuzzy_select(tx),
+                KeyCode::Down => self.fuzzy_move(1),
+                KeyCode::Up => self.fuzzy_move(-1),
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.fuzzy_move(1)
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.fuzzy_move(-1)
+                }
+                KeyCode::Backspace => {
+                    if let Some(f) = self.fuzzy.as_mut() {
+                        f.backspace();
+                    }
+                }
+                KeyCode::Char(c) if key.modifiers.is_empty() => {
+                    if let Some(f) = self.fuzzy.as_mut() {
+                        f.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Crash-recovery prompt swallows keys until dismissed.
+        if self.recovery.is_some() {
+            match key.code {
+                KeyCode::Char('r') => self.restore_recovery(),
+                KeyCode::Char('d') => self.discard_recovery(),
+                KeyCode::Esc => self.recovery = None,
+                _ => {}
+            }
+            return;
+        }
+
+        // Password prompt swallows keys until submitted/cancelled.
+        if self.password_prompt.is_some() {
+            match key.code {
+                KeyCode::Enter => self.confirm_password_prompt(tx),
+                KeyCode::Esc => self.password_prompt = None,
+                KeyCode::Backspace => {
+                    if let Some(p) = self.password_prompt.as_mut() {
+                        p.input.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(p) = self.password_prompt.as_mut() {
+                        p.input.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
 
         // Save-as filename prompt swallows keys until confirmed/cancelled.
         if self.save_prompt.is_some() {
@@ -303,6 +628,26 @@ impl App {
             return;
         }
 
+        // Snippet-name prompt swallows keys until confirmed/cancelled.
+        if self.snippet_prompt.is_some() {
+            match key.code {
+                KeyCode::Enter => self.confirm_save_snippet(tx),
+                KeyCode::Esc => self.snippet_prompt = None,
+                KeyCode::Backspace => {
+                    if let Some(name) = self.snippet_prompt.as_mut() {
+                        name.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(name) = self.snippet_prompt.as_mut() {
+                        name.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // Quit-with-unsaved-buffers prompt.
         if self.quit_prompt {
             match key.code {
@@ -315,6 +660,58 @@ impl App {
                         self.should_quit = true;
                     }
                 }
+                _ => {}
+            }
+            return;
+        }
+
+        // Import file-path prompt swallows keys until confirmed/cancelled.
+        if self.import_prompt.is_some() {
+            match key.code {
+                KeyCode::Enter => self.confirm_import_prompt(),
+                KeyCode::Esc => self.import_prompt = None,
+                KeyCode::Backspace => {
+                    if let Some(p) = self.import_prompt.as_mut() {
+                        p.path.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(p) = self.import_prompt.as_mut() {
+                        p.path.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Import confirmation modal swallows keys until dismissed.
+        if self.pending_import.is_some() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') => self.confirm_import(tx),
+                KeyCode::Esc | KeyCode::Char('n') => self.pending_import = None,
+                _ => {}
+            }
+            return;
+        }
+
+        // Modal list picker (history / recent files) swallows keys until closed.
+        if self.picker.is_some() {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => self.picker_move(1),
+                KeyCode::Char('k') | KeyCode::Up => self.picker_move(-1),
+                KeyCode::Enter => self.picker_select(tx),
+                KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
+                _ => {}
+            }
+            return;
+        }
+
+        // Destructive-statement confirmation swallows keys until dismissed.
+        if self.pending_dangerous.is_some() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') => self.confirm_dangerous(tx),
+                KeyCode::Esc | KeyCode::Char('n') => self.pending_dangerous = None,
                 _ => {}
             }
             return;
@@ -351,135 +748,101 @@ impl App {
             return;
         }
 
-        // `dd` chord state for row deletion (reset unless this key is `d`).
-        let d_pending = self.pending_d;
-        self.pending_d = false;
+        // Resolve the key through the remappable keymap; a completed chord
+        // yields an Action dispatched against the current focus.
+        let spec = KeySpec::from_event(key);
+        if let Some(action) = self.chord.feed(&self.keymap, spec) {
+            self.dispatch(action, tx);
+        }
+    }
 
-        match key.code {
-            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+    /// Execute a resolved keymap [`Action`] against the current focus/state.
+    fn dispatch(&mut self, action: Action, tx: &UnboundedSender<AppMsg>) {
+        match action {
+            Action::Quit => {
                 if self.editor.any_dirty() {
                     self.quit_prompt = true;
                 } else {
                     self.should_quit = true;
                 }
             }
-            KeyCode::Tab => {
+            Action::FocusNext => {
                 self.focus = match self.focus {
                     Focus::Tree => Focus::Grid,
                     Focus::Grid => Focus::Tree,
                 };
-                self.pending_leader = false;
-                self.pending_g = false;
             }
-            KeyCode::Char('j') if key.modifiers.is_empty() => {
-                match self.focus {
-                    Focus::Tree => self.tree.next(),
-                    Focus::Grid => self.result_grid.move_down(),
-                }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('k') if key.modifiers.is_empty() => {
-                match self.focus {
-                    Focus::Tree => self.tree.prev(),
-                    Focus::Grid => self.result_grid.move_up(),
-                }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('h') if key.modifiers.is_empty() => {
-                match self.focus {
-                    Focus::Tree => self.handle_tree_left(),
-                    Focus::Grid => self.result_grid.move_left(),
-                }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('l') if key.modifiers.is_empty() => {
-                match self.focus {
-                    Focus::Tree => self.handle_tree_right(tx),
-                    Focus::Grid => self.result_grid.move_right(),
-                }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('g') if key.modifiers.is_empty() => {
+            Action::ToggleEditor => self.open_editor(),
+            Action::OpenHistory => self.open_history(tx),
+            Action::OpenRecent => self.open_recent_files(tx),
+            Action::Export => self.open_export_menu(),
+            Action::Import => self.start_import(),
+            Action::Down => match self.focus {
+                Focus::Tree => self.tree.next(),
+                Focus::Grid => self.result_grid.move_down(),
+            },
+            Action::Up => match self.focus {
+                Focus::Tree => self.tree.prev(),
+                Focus::Grid => self.result_grid.move_up(),
+            },
+            Action::Left => match self.focus {
+                Focus::Tree => self.handle_tree_left(),
+                Focus::Grid => self.result_grid.move_left(),
+            },
+            Action::Right => match self.focus {
+                Focus::Tree => self.handle_tree_right(tx),
+                Focus::Grid => self.result_grid.move_right(),
+            },
+            Action::Top => {
                 if self.focus == Focus::Grid {
-                    if self.pending_g {
-                        self.result_grid.top();
-                        self.pending_g = false;
-                    } else {
-                        self.pending_g = true;
-                    }
+                    self.result_grid.top();
                 }
-                self.pending_leader = false;
             }
-            KeyCode::Char('G') if key.modifiers.is_empty() => {
+            Action::Bottom => {
                 if self.focus == Focus::Grid {
                     self.result_grid.bottom();
                 }
-                self.pending_leader = false;
-                self.pending_g = false;
             }
-            KeyCode::Enter => {
-                match self.focus {
-                    Focus::Tree => self.handle_enter(tx),
-                    Focus::Grid => {
-                        self.result_grid.begin_edit();
-                        if self.result_grid.is_editing() {
-                            self.mode = Mode::Insert;
-                        }
+            Action::Activate => match self.focus {
+                Focus::Tree => self.handle_enter(tx),
+                Focus::Grid => {
+                    self.result_grid.begin_edit();
+                    if self.result_grid.is_editing() {
+                        self.mode = Mode::Insert;
                     }
                 }
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('o') if key.modifiers.is_empty() && self.focus == Focus::Grid => {
-                self.result_grid.add_row();
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            KeyCode::Char('d') if key.modifiers.is_empty() && self.focus == Focus::Grid => {
-                if d_pending {
-                    self.result_grid.mark_delete();
-                } else {
-                    self.pending_d = true;
+            },
+            Action::AddRow => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.add_row();
                 }
-                self.pending_leader = false;
-                self.pending_g = false;
             }
-            KeyCode::Char('z')
-                if key.modifiers.contains(KeyModifiers::CONTROL) && self.focus == Focus::Grid =>
-            {
-                self.result_grid.discard_changes();
-                self.pending_leader = false;
-                self.pending_g = false;
+            Action::DeleteRow => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.mark_delete();
+                }
             }
-            KeyCode::Char('s')
-                if key.modifiers.contains(KeyModifiers::CONTROL) && self.focus == Focus::Grid =>
-            {
-                self.begin_commit();
-                self.pending_leader = false;
-                self.pending_g = false;
+            Action::Commit => {
+                if self.focus == Focus::Grid {
+                    self.begin_commit();
+                }
             }
-            KeyCode::Char(' ') => {
-                self.pending_leader = true;
-                self.pending_g = false;
+            Action::Discard => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.discard_changes();
+                }
             }
-            KeyCode::Char('e') if self.pending_leader => {
-                self.open_editor();
-                self.pending_leader = false;
-                self.pending_g = false;
+            Action::EmitDdl => {
+                if self.focus == Focus::Tree {
+                    self.emit_table_ddl();
+                }
             }
-            KeyCode::Char('D') if key.modifiers.is_empty() && self.focus == Focus::Tree => {
-                self.emit_table_ddl();
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
-            _ => {
-                self.pending_leader = false;
-                self.pending_g = false;
-            }
+            Action::Help => self.show_help = true,
+            Action::CommandPalette => self.open_command_palette(),
+            Action::FindTable => self.open_table_finder(),
+            Action::OpenFile => self.open_file_finder(),
+            Action::Snippets => self.open_snippets(tx),
+            Action::SaveSnippet => self.begin_save_snippet(),
         }
     }
 
@@ -609,13 +972,92 @@ impl App {
             return;
         };
 
+        // Resolve the password per the §3.2 cascade. The lookups (keyring via the
+        // injected store, then the env-var fallback) are the only I/O here; the
+        // ordering/decision lives in the pure `resolve_password`.
+        let from_keyring = config
+            .keyring_key
+            .as_deref()
+            .and_then(|k| self.credentials.get(k));
+        let from_env = sextant_config::connection_password(name);
+
+        match sextant_config::resolve_password(
+            config.driver,
+            config.keyring_key.as_deref(),
+            from_keyring,
+            from_env,
+        ) {
+            sextant_config::PasswordResolution::Connect(password) => {
+                self.spawn_connect(name.to_string(), conn_idx, password, tx);
+            }
+            sextant_config::PasswordResolution::Prompt { keyring_key } => {
+                self.password_prompt = Some(PasswordPrompt {
+                    name: name.to_string(),
+                    conn_idx,
+                    keyring_key,
+                    input: String::new(),
+                });
+            }
+        }
+    }
+
+    /// Submit the entered password: connect with it and, on success, store it in
+    /// the keyring under the connection's `keyring_key`. The save is deferred to
+    /// [`App::persist_pending_credential`], run when the connection succeeds.
+    fn confirm_password_prompt(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(prompt) = self.password_prompt.take() else {
+            return;
+        };
+        self.pending_credential = Some(PendingCredential {
+            name: prompt.name.clone(),
+            keyring_key: prompt.keyring_key,
+            password: prompt.input.clone(),
+        });
+        self.spawn_connect(prompt.name, prompt.conn_idx, Some(prompt.input), tx);
+    }
+
+    /// Persist a prompt-entered password to the credential store once its
+    /// connection succeeds (§3.2 "save after connect"). No-op unless a pending
+    /// credential matches `name`; clears it either way.
+    fn persist_pending_credential(&mut self, name: &str) {
+        if self
+            .pending_credential
+            .as_ref()
+            .is_none_or(|p| p.name != name)
+        {
+            return;
+        }
+        let pending = self.pending_credential.take().unwrap();
+        if let Err(e) = self
+            .credentials
+            .set(&pending.keyring_key, &pending.password)
+        {
+            tracing::warn!("failed to store password in keyring: {e}");
+        }
+    }
+
+    /// Spawn the async connect + introspection.
+    fn spawn_connect(
+        &mut self,
+        name: String,
+        conn_idx: usize,
+        password: Option<String>,
+        tx: &UnboundedSender<AppMsg>,
+    ) {
+        let Some(config) = self
+            .connection_configs
+            .iter()
+            .find(|c| c.name == name)
+            .cloned()
+        else {
+            return;
+        };
+
         self.tree.set_connecting(conn_idx);
         self.connection_name = Some(format!("{name} (connecting)"));
+        self.busy = true;
 
-        let password = sextant_config::connection_password(name);
-        let config = config.clone();
         let tx = tx.clone();
-        let name = name.to_string();
 
         tokio::spawn(async move {
             let mut mgr = sextant_db::ConnectionManager::new();
@@ -666,6 +1108,20 @@ impl App {
     }
 
     fn handle_msg(&mut self, msg: AppMsg, tx: &UnboundedSender<AppMsg>) {
+        // Any terminal result clears the busy spinner.
+        if matches!(
+            msg,
+            AppMsg::Connected { .. }
+                | AppMsg::ConnectionFailed { .. }
+                | AppMsg::QueryResult(_)
+                | AppMsg::QueryError(_)
+                | AppMsg::CommitResult(_)
+                | AppMsg::ImportFinished(_)
+                | AppMsg::ExportFinished(_)
+        ) {
+            self.busy = false;
+        }
+
         match msg {
             AppMsg::Connected {
                 name,
@@ -687,11 +1143,21 @@ impl App {
                 }
                 self.executors.insert(name.clone(), executor);
                 self.table_meta.insert(name.clone(), metadata);
+                // A prompt-entered password is now known to work: persist it.
+                self.persist_pending_credential(&name);
                 self.connection_name = Some(name);
             }
             AppMsg::ConnectionFailed { name, error } => {
                 if let Some(idx) = self.tree.connection_index_by_name(&name) {
                     self.tree.set_error(idx, error.clone());
+                }
+                // Don't keep a password that failed to connect.
+                if self
+                    .pending_credential
+                    .as_ref()
+                    .is_some_and(|p| p.name == name)
+                {
+                    self.pending_credential = None;
                 }
                 self.connection_name = Some(format!("{name}: {error}"));
             }
@@ -699,6 +1165,7 @@ impl App {
                 let rows = result.rows.len();
                 self.last_result = Some(result);
                 self.last_error = None;
+                self.last_notice = None;
                 self.last_query_duration = self.query_start.take().map(|t| t.elapsed());
                 tracing::info!("query returned {} rows", rows);
             }
@@ -743,13 +1210,99 @@ impl App {
                 if let (Some(name), Some(sql)) =
                     (self.connection_name.clone(), self.last_browse_sql.clone())
                 {
-                    self.run_sql(&name, sql, tx);
+                    self.run_sql(&name, sql, tx, false);
                 }
             }
             AppMsg::CommitResult(Err(error)) => {
                 tracing::warn!("commit error: {}", error);
                 // Keep pending edits so the user can fix and retry.
                 self.last_error = Some(error);
+            }
+            AppMsg::HistoryLoaded(entries) => {
+                let items = entries
+                    .into_iter()
+                    .map(|h| {
+                        let first = h.sql.lines().next().unwrap_or("").trim();
+                        let dur = h
+                            .duration_ms
+                            .map(|d| format!("{d}ms"))
+                            .unwrap_or_else(|| "-".into());
+                        let mark = if h.error.is_some() { "✗" } else { " " };
+                        let label =
+                            format!("{mark} [{}] {} ({dur})", h.connection, truncate(first, 60));
+                        PickerItem {
+                            label,
+                            action: PickerAction::LoadSql(h.sql),
+                        }
+                    })
+                    .collect();
+                self.picker = Some(Picker {
+                    title: "Query history".into(),
+                    items,
+                    selected: 0,
+                });
+            }
+            AppMsg::RecentFilesLoaded(entries) => {
+                let items = entries
+                    .into_iter()
+                    .map(|f| PickerItem {
+                        label: format!("{}  ({})", f.path, f.last_opened),
+                        action: PickerAction::OpenFile(std::path::PathBuf::from(f.path)),
+                    })
+                    .collect();
+                self.picker = Some(Picker {
+                    title: "Recent files".into(),
+                    items,
+                    selected: 0,
+                });
+            }
+            AppMsg::SnippetsLoaded(snippets) => {
+                if snippets.is_empty() {
+                    self.last_notice = Some("no snippets saved yet (<Space>S to save)".into());
+                } else {
+                    let items = snippets
+                        .into_iter()
+                        .map(|s| {
+                            let preview = s.body.lines().next().unwrap_or("").trim();
+                            FuzzyItem {
+                                label: format!("{}  —  {}", s.name, truncate(preview, 50)),
+                                action: FuzzyAction::InsertSnippet(s.body),
+                            }
+                        })
+                        .collect();
+                    self.fuzzy = Some(FuzzyPicker::new("Insert snippet", items));
+                }
+            }
+            AppMsg::SnippetSaved(Ok(name)) => {
+                self.last_error = None;
+                self.last_notice = Some(format!("saved snippet '{name}'"));
+            }
+            AppMsg::SnippetSaved(Err(error)) => {
+                self.last_error = Some(format!("snippet save failed: {error}"));
+            }
+            AppMsg::ExportFinished(Ok(path)) => {
+                tracing::info!("exported to {}", path.display());
+                self.last_error = None;
+                self.last_notice = Some(format!("exported → {}", path.display()));
+            }
+            AppMsg::ExportFinished(Err(error)) => {
+                tracing::warn!("export error: {}", error);
+                self.last_error = Some(format!("export failed: {error}"));
+            }
+            AppMsg::ImportFinished(Ok(affected)) => {
+                tracing::info!("import affected {affected} rows");
+                self.last_error = None;
+                self.last_notice = Some(format!("imported {affected} rows"));
+                // Refresh the current browse so imported rows appear.
+                if let (Some(name), Some(sql)) =
+                    (self.connection_name.clone(), self.last_browse_sql.clone())
+                {
+                    self.run_sql(&name, sql, tx, false);
+                }
+            }
+            AppMsg::ImportFinished(Err(error)) => {
+                tracing::warn!("import error: {}", error);
+                self.last_error = Some(format!("import failed: {error}"));
             }
             AppMsg::Quit => {
                 self.should_quit = true;
@@ -820,11 +1373,172 @@ impl App {
                 self.editor.set_active_path(path.to_path_buf());
                 self.editor.mark_saved();
                 self.last_error = None;
+                self.record_recent_file(path);
+                // Once nothing is dirty, the swap file is no longer needed.
+                if !self.editor.any_dirty() {
+                    swap::remove(&self.session_swap);
+                }
             }
             Err(e) => {
                 self.last_error = Some(format!("save failed: {e}"));
             }
         }
+    }
+
+    /// Open the command palette: a fuzzy list of high-level commands.
+    fn open_command_palette(&mut self) {
+        let commands = [
+            (
+                "Open SQL editor",
+                FuzzyAction::Dispatch(Action::ToggleEditor),
+            ),
+            ("Query history", FuzzyAction::Dispatch(Action::OpenHistory)),
+            ("Recent files", FuzzyAction::Dispatch(Action::OpenRecent)),
+            ("Find table", FuzzyAction::FindTable),
+            ("Open .sql file", FuzzyAction::OpenFile),
+            ("Export result set", FuzzyAction::Dispatch(Action::Export)),
+            ("Import into table", FuzzyAction::Dispatch(Action::Import)),
+            ("Emit CREATE TABLE", FuzzyAction::Dispatch(Action::EmitDdl)),
+            ("Help", FuzzyAction::Dispatch(Action::Help)),
+            ("Quit", FuzzyAction::Dispatch(Action::Quit)),
+        ];
+        let items = commands
+            .into_iter()
+            .map(|(label, action)| FuzzyItem {
+                label: label.to_string(),
+                action,
+            })
+            .collect();
+        self.fuzzy = Some(FuzzyPicker::new("Command palette", items));
+    }
+
+    /// Open the table finder: a fuzzy list of every browseable table.
+    fn open_table_finder(&mut self) {
+        let items = self
+            .tree
+            .browseable_tables()
+            .into_iter()
+            .map(
+                |(conn, schema, table, conn_name, schema_name, table_name)| FuzzyItem {
+                    label: format!("{conn_name}  {schema_name}.{table_name}"),
+                    action: FuzzyAction::Browse {
+                        conn,
+                        schema,
+                        table,
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            self.last_error = Some("no connected tables to find".into());
+            return;
+        }
+        self.fuzzy = Some(FuzzyPicker::new("Find table", items));
+    }
+
+    /// Open the file opener: a fuzzy list of `.sql` files in the queries dir.
+    fn open_file_finder(&mut self) {
+        let dir = sextant_config::queries_dir();
+        let mut items: Vec<FuzzyItem> = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("sql"))
+                .map(|path| FuzzyItem {
+                    label: path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    action: FuzzyAction::Load(path),
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        items.sort_by(|a, b| a.label.cmp(&b.label));
+        if items.is_empty() {
+            self.last_error = Some(format!("no .sql files in {}", dir.display()));
+            return;
+        }
+        self.fuzzy = Some(FuzzyPicker::new("Open file", items));
+    }
+
+    /// Move the fuzzy-picker selection by `delta`.
+    fn fuzzy_move(&mut self, delta: isize) {
+        if let Some(f) = self.fuzzy.as_mut() {
+            f.move_selection(delta);
+        }
+    }
+
+    /// Act on the highlighted fuzzy-picker item, then close the picker.
+    fn fuzzy_select(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(action) = self.fuzzy.take().and_then(FuzzyPicker::into_selected) else {
+            return;
+        };
+        match action {
+            FuzzyAction::Dispatch(a) => self.dispatch(a, tx),
+            FuzzyAction::FindTable => self.open_table_finder(),
+            FuzzyAction::OpenFile => self.open_file_finder(),
+            FuzzyAction::Browse {
+                conn,
+                schema,
+                table,
+            } => self.browse_table(conn, schema, table, tx),
+            FuzzyAction::Load(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => self.load_into_editor(&content, Some(path)),
+                Err(e) => self.last_error = Some(format!("open failed: {e}")),
+            },
+            FuzzyAction::InsertSnippet(body) => {
+                if !self.editor_open {
+                    self.open_editor();
+                }
+                self.editor.insert_str(&body);
+            }
+        }
+    }
+
+    /// Load snippets from the state store into a fuzzy picker (async).
+    fn open_snippets(&self, tx: &UnboundedSender<AppMsg>) {
+        let Some(store) = self.state_store.clone() else {
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(snippets) = store.snippets().await {
+                let _ = tx.send(AppMsg::SnippetsLoaded(snippets));
+            }
+        });
+    }
+
+    /// Begin saving the current editor buffer as a named snippet (name prompt).
+    fn begin_save_snippet(&mut self) {
+        if self.editor.content().trim().is_empty() {
+            self.last_error = Some("nothing to save as a snippet".into());
+            return;
+        }
+        self.snippet_prompt = Some(String::new());
+    }
+
+    /// Persist the current buffer under the prompted snippet name (async).
+    fn confirm_save_snippet(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(name) = self.snippet_prompt.take() else {
+            return;
+        };
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let body = self.editor.content();
+        let Some(store) = self.state_store.clone() else {
+            self.last_error = Some("snippets unavailable (no state store)".into());
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let msg = match store.save_snippet(&name, &body).await {
+                Ok(()) => AppMsg::SnippetSaved(Ok(name)),
+                Err(e) => AppMsg::SnippetSaved(Err(e.to_string())),
+            };
+            let _ = tx.send(msg);
+        });
     }
 
     fn run_editor_sql(&mut self, tx: &UnboundedSender<AppMsg>) {
@@ -833,15 +1547,106 @@ impl App {
             tracing::warn!("run_editor_sql: no connection_name");
             return;
         };
+        // Destructive statements (DELETE/UPDATE without WHERE, DDL) require a
+        // confirmation step before they run.
+        if let Some(reason) = sextant_db::dangerous_reason(&sql) {
+            self.pending_dangerous = Some(DangerousStmt {
+                conn: name,
+                sql,
+                reason,
+            });
+            return;
+        }
+        self.execute_editor_sql(name, sql, tx);
+    }
+
+    /// Run an editor statement: clear the (read-only) edit context, drop the
+    /// browse-replay SQL, and dispatch it to the executor (recorded in history).
+    fn execute_editor_sql(&mut self, name: String, sql: String, tx: &UnboundedSender<AppMsg>) {
         // Ad-hoc editor results are not tied to a browseable table → read-only.
         self.result_grid.set_edit_context(None);
         self.last_browse_sql = None;
-        self.run_sql(&name, sql, tx);
+        self.run_sql(&name, sql, tx, true);
+    }
+
+    /// Run the confirmed destructive statement.
+    fn confirm_dangerous(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(d) = self.pending_dangerous.take() else {
+            return;
+        };
+        self.execute_editor_sql(d.conn, d.sql, tx);
+    }
+
+    /// Scan the swap directory for orphan files (from a crashed session) and, if
+    /// the newest holds buffers, stage a recovery prompt.
+    fn scan_for_recovery(&mut self) {
+        let orphans = swap::find_orphans();
+        let Some(newest) = orphans.first() else {
+            return;
+        };
+        if let Some(doc) = swap::read(newest) {
+            if !doc.buffers.is_empty() {
+                self.recovery = Some(Recovery {
+                    orphans,
+                    buffers: doc.buffers,
+                });
+            }
+        }
+    }
+
+    /// Restore recovered buffers into the editor and delete the orphan swaps.
+    fn restore_recovery(&mut self) {
+        let Some(rec) = self.recovery.take() else {
+            return;
+        };
+        self.open_editor();
+        self.editor.restore_buffers(rec.buffers);
+        for path in &rec.orphans {
+            swap::remove(path);
+        }
+    }
+
+    /// Discard the recovery offer and delete the orphan swap files.
+    fn discard_recovery(&mut self) {
+        let Some(rec) = self.recovery.take() else {
+            return;
+        };
+        for path in &rec.orphans {
+            swap::remove(path);
+        }
+    }
+
+    /// Write a swap file for the dirty buffers, throttled to ~30s. When nothing
+    /// is dirty, remove any existing swap (so a clean editor leaves none behind).
+    fn maybe_write_swap(&mut self) {
+        if self.last_swap.elapsed() < Duration::from_secs(30) {
+            return;
+        }
+        self.last_swap = Instant::now();
+        let dirty = self.editor.dirty_snapshot();
+        if dirty.is_empty() {
+            swap::remove(&self.session_swap);
+            return;
+        }
+        let doc = swap::SwapDoc { buffers: dirty };
+        if let Err(e) = sextant_config::write_swap(&self.session_swap, &swap::serialize(&doc)) {
+            tracing::warn!("swap write failed: {e}");
+        }
     }
 
     /// Spawn a query against the named connection's executor; the result is
     /// delivered back through the channel as `QueryResult`/`QueryError`.
-    fn run_sql(&mut self, conn_name: &str, sql: String, tx: &UnboundedSender<AppMsg>) {
+    ///
+    /// When `record` is set, the statement (with its duration and any error) is
+    /// appended to the query history. Auto-generated queries (table browse,
+    /// post-commit refresh) pass `record = false` to keep the history clean.
+    fn run_sql(
+        &mut self,
+        conn_name: &str,
+        sql: String,
+        tx: &UnboundedSender<AppMsg>,
+        record: bool,
+    ) {
         tracing::info!("run_sql: conn='{}', sql='{}'", conn_name, sql.trim());
         let Some(executor) = self.executors.get(conn_name).cloned() else {
             tracing::warn!(
@@ -852,9 +1657,27 @@ impl App {
             return;
         };
         self.query_start = Some(Instant::now());
+        self.busy = true;
         let tx = tx.clone();
+        let store = if record {
+            self.state_store.clone()
+        } else {
+            None
+        };
+        let conn = conn_name.to_string();
         tokio::spawn(async move {
-            match executor.execute(&sql).await {
+            let started = Instant::now();
+            let outcome = executor.execute(&sql).await;
+
+            if let Some(store) = store {
+                let duration_ms = Some(started.elapsed().as_millis() as i64);
+                let error = outcome.as_ref().err().map(|e| e.to_string());
+                let _ = store
+                    .record_query(&conn, &sql, duration_ms, error.as_deref())
+                    .await;
+            }
+
+            match outcome {
                 Ok(result) => {
                     let _ = tx.send(AppMsg::QueryResult(result));
                 }
@@ -863,6 +1686,298 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Record a saved file in the recent-files ring (fire-and-forget).
+    fn record_recent_file(&self, path: &std::path::Path) {
+        if let (Some(store), Some(conn)) = (self.state_store.clone(), self.connection_name.clone())
+        {
+            let path = path.to_string_lossy().into_owned();
+            tokio::spawn(async move {
+                let _ = store.record_file(&conn, &path).await;
+            });
+        }
+    }
+
+    /// Load the query history into a modal picker (async fetch → `HistoryLoaded`).
+    fn open_history(&self, tx: &UnboundedSender<AppMsg>) {
+        let Some(store) = self.state_store.clone() else {
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(items) = store.recent_queries(50).await {
+                let _ = tx.send(AppMsg::HistoryLoaded(items));
+            }
+        });
+    }
+
+    /// Load the active connection's recent files into a modal picker.
+    fn open_recent_files(&self, tx: &UnboundedSender<AppMsg>) {
+        let (Some(store), Some(conn)) = (self.state_store.clone(), self.connection_name.clone())
+        else {
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(items) = store.recent_files(&conn).await {
+                let _ = tx.send(AppMsg::RecentFilesLoaded(items));
+            }
+        });
+    }
+
+    /// Open the export-format picker for the current result set.
+    fn open_export_menu(&mut self) {
+        if self.last_result.is_none() {
+            self.last_error = Some("nothing to export".into());
+            return;
+        }
+        let items = [
+            sextant_db::ExportFormat::Csv,
+            sextant_db::ExportFormat::Json,
+            sextant_db::ExportFormat::Sql,
+        ]
+        .into_iter()
+        .map(|f| PickerItem {
+            label: f.label().to_string(),
+            action: PickerAction::Export(f),
+        })
+        .collect();
+        self.picker = Some(Picker {
+            title: "Export as".into(),
+            items,
+            selected: 0,
+        });
+    }
+
+    /// Serialize the current result set in `format` and write it to a
+    /// timestamped file under the exports directory (async; reports back via
+    /// [`AppMsg::ExportFinished`]).
+    fn run_export(&mut self, format: sextant_db::ExportFormat, tx: &UnboundedSender<AppMsg>) {
+        let Some(result) = self.last_result.clone() else {
+            return;
+        };
+        // SQL export needs a target table name and dialect; fall back to a
+        // generic name for ad-hoc query results that aren't a single table.
+        let driver = self
+            .connection_name
+            .as_deref()
+            .and_then(|c| self.driver_for(c))
+            .unwrap_or(sextant_core::Driver::Postgres);
+        let table = self
+            .result_grid
+            .edit_context()
+            .map(|c| c.table.clone())
+            .unwrap_or_else(|| "exported_data".to_string());
+
+        let stem = self
+            .result_grid
+            .edit_context()
+            .map(|c| c.table.clone())
+            .unwrap_or_else(|| "export".to_string());
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = sextant_config::exports_dir()
+            .join(format!("{stem}-{millis}.{ext}", ext = format.extension()));
+
+        self.busy = true;
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let content = sextant_db::export::export(&result, format, driver, &table);
+            let msg = match sextant_config::write_export(&path, &content) {
+                Ok(()) => AppMsg::ExportFinished(Ok(path)),
+                Err(e) => AppMsg::ExportFinished(Err(e.to_string())),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// Begin importing into the table selected in the tree: open a file-path
+    /// prompt bound to that target.
+    fn start_import(&mut self) {
+        let Some(tree_pane::LineKind::Table {
+            conn,
+            schema,
+            table,
+        }) = self.tree.selected_kind()
+        else {
+            self.last_error = Some("select a table in the tree to import into".into());
+            return;
+        };
+        let conn_name = self.tree.connections[conn].name.clone();
+        let (Some(schema_name), Some(table_name), Some(driver)) = (
+            self.tree.schema_name(conn, schema),
+            self.tree.table_name(conn, schema, table),
+            self.driver_for(&conn_name),
+        ) else {
+            return;
+        };
+        self.import_prompt = Some(ImportPrompt {
+            conn: conn_name,
+            schema: schema_name,
+            table: table_name,
+            driver,
+            path: String::new(),
+        });
+    }
+
+    /// Read the prompted file, parse it by extension, and stage the resulting
+    /// statements for confirmation. Relative paths resolve under the exports
+    /// directory (symmetric with where exports are written).
+    fn confirm_import_prompt(&mut self) {
+        let Some(prompt) = self.import_prompt.take() else {
+            return;
+        };
+        let raw = std::path::PathBuf::from(prompt.path.trim());
+        let path = if raw.is_absolute() {
+            raw
+        } else {
+            sextant_config::exports_dir().join(raw)
+        };
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.last_error = Some(format!("import: cannot read {}: {e}", path.display()));
+                return;
+            }
+        };
+
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let (statements, summary) = match ext.as_str() {
+            "csv" | "json" => {
+                let parsed = if ext == "csv" {
+                    sextant_db::import::parse_csv(&content)
+                } else {
+                    sextant_db::import::parse_json(&content)
+                };
+                let data = match parsed {
+                    Ok(d) => d,
+                    Err(e) => {
+                        self.last_error = Some(format!("import: {e}"));
+                        return;
+                    }
+                };
+                let Some(meta) = self
+                    .table_meta
+                    .get(&prompt.conn)
+                    .and_then(|m| m.get(&(prompt.schema.clone(), prompt.table.clone())))
+                else {
+                    self.last_error =
+                        Some("import: no column metadata for the target table".into());
+                    return;
+                };
+                let preview = sextant_db::import::preview(&data, meta);
+                let statements = sextant_db::import::build_inserts(
+                    prompt.driver,
+                    &prompt.schema,
+                    &prompt.table,
+                    &data,
+                    &preview.mapping,
+                    meta,
+                );
+                if statements.is_empty() {
+                    self.last_error =
+                        Some("import: no source columns match the target table".into());
+                    return;
+                }
+                (statements, import_summary(&prompt.table, &preview))
+            }
+            "sql" => {
+                let statements = sextant_db::import::split_sql_statements(&content);
+                if statements.is_empty() {
+                    self.last_error = Some("import: the SQL file has no statements".into());
+                    return;
+                }
+                let summary = vec![format!(
+                    "Run {} SQL statement(s) as a script.",
+                    statements.len()
+                )];
+                (statements, summary)
+            }
+            _ => {
+                self.last_error =
+                    Some("import: unsupported file type (use .csv/.json/.sql)".into());
+                return;
+            }
+        };
+
+        self.pending_import = Some(PendingImport {
+            conn: prompt.conn,
+            summary,
+            statements,
+        });
+    }
+
+    /// Run the staged import statements in a transaction (async; reports back
+    /// via [`AppMsg::ImportFinished`]).
+    fn confirm_import(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(pending) = self.pending_import.take() else {
+            return;
+        };
+        let Some(executor) = self.executors.get(&pending.conn).cloned() else {
+            self.last_error = Some("import: not connected".into());
+            return;
+        };
+        self.busy = true;
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let msg = match executor.execute_transaction(&pending.statements).await {
+                Ok(affected) => AppMsg::ImportFinished(Ok(affected)),
+                Err(e) => AppMsg::ImportFinished(Err(e.to_string())),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// Move the picker selection by `delta`, wrapping around.
+    fn picker_move(&mut self, delta: isize) {
+        if let Some(p) = self.picker.as_mut() {
+            if p.items.is_empty() {
+                return;
+            }
+            let len = p.items.len() as isize;
+            p.selected = (p.selected as isize + delta).rem_euclid(len) as usize;
+        }
+    }
+
+    /// Act on the highlighted picker entry, then dismiss the picker.
+    fn picker_select(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        let Picker {
+            items, selected, ..
+        } = picker;
+        let Some(item) = items.into_iter().nth(selected) else {
+            return;
+        };
+        match item.action {
+            PickerAction::LoadSql(sql) => self.load_into_editor(&sql, None),
+            PickerAction::OpenFile(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => self.load_into_editor(&content, Some(path)),
+                Err(e) => self.last_error = Some(format!("open failed: {e}")),
+            },
+            PickerAction::Export(format) => self.run_export(format, tx),
+        }
+    }
+
+    /// Open the editor with the given content; when `path` is set, bind it as
+    /// the buffer's file (a freshly-loaded file is not dirty).
+    fn load_into_editor(&mut self, content: &str, path: Option<std::path::PathBuf>) {
+        self.open_editor();
+        self.editor.set_content(content);
+        if let Some(path) = path {
+            self.editor.set_active_path(path);
+            self.editor.mark_saved();
+        }
     }
 
     /// Driver for a connection by name (from the loaded config).
@@ -974,7 +2089,7 @@ impl App {
 
         self.connection_name = Some(conn_name.clone());
         self.last_browse_sql = Some(sql.clone());
-        self.run_sql(&conn_name, sql, tx);
+        self.run_sql(&conn_name, sql, tx, false);
         self.focus = Focus::Grid;
     }
 
@@ -1000,6 +2115,7 @@ impl App {
         let Some(executor) = self.executors.get(&name).cloned() else {
             return;
         };
+        self.busy = true;
         let tx = tx.clone();
         tokio::spawn(async move {
             let result = executor
@@ -1059,6 +2175,16 @@ async fn run_async() -> io::Result<()> {
     let mut terminal = setup_terminal()?;
     let mut app = App::new()?;
 
+    // Open the local state store; the app degrades gracefully if it fails.
+    match sextant_state::StateStore::open(&sextant_config::state_db_path()).await {
+        Ok(store) => app.state_store = Some(store),
+        Err(e) => tracing::warn!("state store unavailable: {e}"),
+    }
+
+    // Offer to recover buffers from any swap files left by a crashed session.
+    // (Done here, not in `App::new`, so unit tests never touch the real FS.)
+    app.scan_for_recovery();
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppMsg>();
     let mut event_stream = crossterm::event::EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(250));
@@ -1092,7 +2218,11 @@ async fn run_async() -> io::Result<()> {
                 app.needs_redraw = true;
             }
             _ = tick.tick() => {
-                if app.editor_open {
+                app.maybe_write_swap();
+                if app.busy {
+                    app.spinner_frame = app.spinner_frame.wrapping_add(1);
+                    app.needs_redraw = true;
+                } else if app.editor_open {
                     app.needs_redraw = true;
                 }
             }
@@ -1102,6 +2232,9 @@ async fn run_async() -> io::Result<()> {
             break;
         }
     }
+
+    // Clean exit: drop this session's swap file so it isn't seen as an orphan.
+    swap::remove(&app.session_swap);
 
     restore_terminal(&mut terminal)?;
     Ok(())
@@ -1122,7 +2255,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Re
 }
 
 /// Render the commit-confirmation modal listing the statements to be run.
-fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String]) {
+fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String], p: Palette) {
     let width = (area.width as f32 * 0.7) as u16;
     let height = (statements.len() as u16 + 4).min(area.height.max(4));
     let x = area.x + (area.width.saturating_sub(width)) / 2;
@@ -1136,14 +2269,17 @@ fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String]) {
 
     let mut lines: Vec<Line> = vec![Line::from(Span::styled(
         "Commit these changes?",
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(p.accent_alt),
     ))];
     for s in statements {
-        lines.push(Line::from(Span::raw(format!("  {s}"))));
+        lines.push(Line::from(Span::styled(
+            format!("  {s}"),
+            Style::default().fg(p.foreground),
+        )));
     }
     lines.push(Line::from(Span::styled(
         "<Enter>/y confirm   <Esc>/n cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(p.muted),
     )));
 
     frame.render_widget(Clear, rect);
@@ -1152,15 +2288,15 @@ fn render_commit_modal(frame: &mut Frame, area: Rect, statements: &[String]) {
             Block::default()
                 .title(" Confirm commit ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .style(Style::default().bg(Color::Black)),
+                .border_style(Style::default().fg(p.accent_alt))
+                .style(Style::default().bg(p.background)),
         ),
         rect,
     );
 }
 
 /// Render a small centered modal with the given title and body lines.
-fn render_centered_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
+fn render_centered_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, p: Palette) {
     let width = (area.width as f32 * 0.6).max(20.0) as u16;
     let height = (lines.len() as u16 + 2).min(area.height.max(3));
     let x = area.x + (area.width.saturating_sub(width)) / 2;
@@ -1177,42 +2313,385 @@ fn render_centered_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<
             Block::default()
                 .title(format!(" {title} "))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .style(Style::default().bg(Color::Black)),
+                .border_style(Style::default().fg(p.accent_alt))
+                .style(Style::default().bg(p.background)),
         ),
         rect,
     );
 }
 
+/// Build the read-only summary lines shown before a CSV/JSON import runs.
+fn import_summary(table: &str, preview: &sextant_db::ImportPreview) -> Vec<String> {
+    let mut lines = vec![format!(
+        "Insert {} row(s) into {}.",
+        preview.row_count, table
+    )];
+    let mapped: Vec<&str> = preview
+        .mapping
+        .pairs
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .collect();
+    lines.push(format!("Columns: {}", mapped.join(", ")));
+    if !preview.mapping.unmatched_source.is_empty() {
+        lines.push(format!(
+            "Ignored (no match): {}",
+            preview.mapping.unmatched_source.join(", ")
+        ));
+    }
+    if preview.type_issues > 0 {
+        lines.push(format!(
+            "⚠ {} value(s) may not match the column type",
+            preview.type_issues
+        ));
+    }
+    lines
+}
+
+/// Render the import file-path prompt.
+fn render_import_prompt(frame: &mut Frame, area: Rect, prompt: &ImportPrompt, p: Palette) {
+    render_centered_modal(
+        frame,
+        area,
+        &format!("Import into {}", prompt.table),
+        vec![
+            Line::from(Span::styled(
+                format!("{}_", prompt.path),
+                Style::default().fg(p.foreground),
+            )),
+            Line::from(Span::styled(
+                "path to .csv/.json/.sql (abs, or under exports dir) │ <Enter> load │ <Esc> cancel",
+                Style::default().fg(p.muted),
+            )),
+        ],
+        p,
+    );
+}
+
+/// Render the import-confirmation modal listing the summary of what will run.
+fn render_import_modal(frame: &mut Frame, area: Rect, pending: &PendingImport, p: Palette) {
+    let mut lines: Vec<Line> = pending
+        .summary
+        .iter()
+        .map(|s| Line::from(Span::styled(s.clone(), Style::default().fg(p.foreground))))
+        .collect();
+    lines.push(Line::from(Span::styled(
+        "<Enter>/y import   <Esc>/n cancel",
+        Style::default().fg(p.muted),
+    )));
+    render_centered_modal(frame, area, "Confirm import", lines, p);
+}
+
+/// Render the destructive-statement confirmation modal.
+fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousStmt, p: Palette) {
+    let first = dangerous.sql.lines().next().unwrap_or("").trim();
+    render_centered_modal(
+        frame,
+        area,
+        "Confirm destructive statement",
+        vec![
+            Line::from(Span::styled(
+                format!("⚠ {}", dangerous.reason),
+                Style::default().fg(p.error),
+            )),
+            Line::from(Span::styled(
+                format!("  {}", truncate(first, 70)),
+                Style::default().fg(p.foreground),
+            )),
+            Line::from(Span::styled(
+                "<Enter>/y run   <Esc>/n cancel",
+                Style::default().fg(p.muted),
+            )),
+        ],
+        p,
+    );
+}
+
+/// Render the fuzzy picker: a query line above the ranked, filtered list.
+fn render_fuzzy_picker(frame: &mut Frame, area: Rect, fuzzy: &FuzzyPicker, p: Palette) {
+    let width = (area.width as f32 * 0.6).clamp(30.0, 80.0) as u16;
+    let height = (area.height as f32 * 0.6).clamp(6.0, 20.0) as u16;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    // Query line, then as many ranked items as fit (minus borders + query).
+    let max_rows = height.saturating_sub(3) as usize;
+    let offset = fuzzy.selected.saturating_sub(max_rows.saturating_sub(1));
+    let labels = fuzzy.visible_labels();
+
+    let mut lines: Vec<Line> = vec![Line::from(vec![
+        Span::styled("> ", Style::default().fg(p.accent)),
+        Span::styled(
+            format!("{}_", fuzzy.query),
+            Style::default().fg(p.foreground),
+        ),
+    ])];
+    for (i, label) in labels.iter().enumerate().skip(offset).take(max_rows) {
+        if i == fuzzy.selected {
+            lines.push(Line::from(Span::styled(
+                format!("▶ {label}"),
+                Style::default().fg(p.selection_fg).bg(p.selection_bg),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("  {label}"),
+                Style::default().fg(p.foreground),
+            )));
+        }
+    }
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!(" {} ", fuzzy.title))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(p.accent))
+                .style(Style::default().bg(p.background)),
+        ),
+        rect,
+    );
+}
+
+/// Render the help overlay: a cheatsheet built dynamically from the keymap,
+/// plus a static section for editor/modal keys not in the remappable map.
+fn render_help_overlay(frame: &mut Frame, area: Rect, keymap: &Keymap, p: Palette) {
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "Normal mode",
+        Style::default().fg(p.accent),
+    )));
+    for (chord, desc) in keymap.describe() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {chord:<10}"), Style::default().fg(p.accent_alt)),
+            Span::styled(desc.to_string(), Style::default().fg(p.foreground)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Editor",
+        Style::default().fg(p.accent),
+    )));
+    for (chord, desc) in [
+        ("i", "insert mode"),
+        ("<Esc>", "normal mode / close"),
+        ("<C-e>", "run query"),
+        ("<C-s>", "save buffer"),
+        ("<Tab>", "next buffer"),
+        ("<C-t>", "new buffer"),
+        ("<C-Space>", "autocomplete"),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {chord:<10}"), Style::default().fg(p.accent_alt)),
+            Span::styled(desc.to_string(), Style::default().fg(p.foreground)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "press any key to close",
+        Style::default().fg(p.muted),
+    )));
+
+    let width = (area.width as f32 * 0.6).clamp(30.0, 70.0) as u16;
+    let height = (lines.len() as u16 + 2).min(area.height.max(3));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(" Help ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(p.accent))
+                .style(Style::default().bg(p.background)),
+        ),
+        rect,
+    );
+}
+
+/// Render the interactive password prompt (input masked).
+fn render_password_prompt(frame: &mut Frame, area: Rect, prompt: &PasswordPrompt, p: Palette) {
+    let masked: String = "*".repeat(prompt.input.chars().count());
+    render_centered_modal(
+        frame,
+        area,
+        &format!("Password for {}", prompt.name),
+        vec![
+            Line::from(Span::styled(
+                format!("{masked}_"),
+                Style::default().fg(p.foreground),
+            )),
+            Line::from(Span::styled(
+                "<Enter> connect & save to keyring │ <Esc> cancel",
+                Style::default().fg(p.muted),
+            )),
+        ],
+        p,
+    );
+}
+
+/// Render the crash-recovery prompt.
+fn render_recovery_modal(frame: &mut Frame, area: Rect, recovery: &Recovery, p: Palette) {
+    let n = recovery.buffers.len();
+    render_centered_modal(
+        frame,
+        area,
+        "Recover unsaved work",
+        vec![
+            Line::from(Span::styled(
+                format!("Found {n} unsaved buffer(s) from a previous session."),
+                Style::default().fg(p.foreground),
+            )),
+            Line::from(Span::styled(
+                "r restore │ d discard │ <Esc> ignore",
+                Style::default().fg(p.muted),
+            )),
+        ],
+        p,
+    );
+}
+
+/// Render the snippet-name prompt.
+fn render_snippet_prompt(frame: &mut Frame, area: Rect, name: &str, p: Palette) {
+    render_centered_modal(
+        frame,
+        area,
+        "Save snippet as",
+        vec![
+            Line::from(Span::styled(
+                format!("{name}_"),
+                Style::default().fg(p.foreground),
+            )),
+            Line::from(Span::styled(
+                "name the snippet │ <Enter> save │ <Esc> cancel",
+                Style::default().fg(p.muted),
+            )),
+        ],
+        p,
+    );
+}
+
 /// Render the Save-as filename prompt.
-fn render_save_prompt(frame: &mut Frame, area: Rect, name: &str) {
+fn render_save_prompt(frame: &mut Frame, area: Rect, name: &str, p: Palette) {
     render_centered_modal(
         frame,
         area,
         "Save as",
         vec![
-            Line::from(format!("{name}_")),
+            Line::from(Span::styled(
+                format!("{name}_"),
+                Style::default().fg(p.foreground),
+            )),
             Line::from(Span::styled(
                 "type a name (.sql) │ <Enter> save │ <Esc> cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(p.muted),
             )),
         ],
+        p,
+    );
+}
+
+/// Truncate `s` to at most `max` chars, appending `…` when shortened.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{head}…")
+    }
+}
+
+/// Render a modal list picker (query history / recent files).
+fn render_picker(frame: &mut Frame, area: Rect, picker: &Picker, p: Palette) {
+    let width = (area.width as f32 * 0.7).max(20.0) as u16;
+    let height = ((picker.items.len() as u16).max(1) + 3).min(area.height.max(6));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    // Rows that fit inside the borders, minus the footer hint line.
+    let max_rows = height.saturating_sub(3) as usize;
+    let offset = picker.selected.saturating_sub(max_rows.saturating_sub(1));
+
+    let mut lines: Vec<Line> = if picker.items.is_empty() {
+        vec![Line::from(Span::styled(
+            "(empty)",
+            Style::default().fg(p.muted),
+        ))]
+    } else {
+        picker
+            .items
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(max_rows)
+            .map(|(i, item)| {
+                if i == picker.selected {
+                    Line::from(Span::styled(
+                        format!("▶ {}", item.label),
+                        Style::default().fg(p.selection_fg).bg(p.selection_bg),
+                    ))
+                } else {
+                    Line::from(Span::styled(
+                        format!("  {}", item.label),
+                        Style::default().fg(p.foreground),
+                    ))
+                }
+            })
+            .collect()
+    };
+    lines.push(Line::from(Span::styled(
+        "<j/k> move │ <Enter> open │ <Esc> close",
+        Style::default().fg(p.muted),
+    )));
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!(" {} ", picker.title))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(p.accent))
+                .style(Style::default().bg(p.background)),
+        ),
+        rect,
     );
 }
 
 /// Render the quit-with-unsaved-buffers prompt.
-fn render_quit_prompt(frame: &mut Frame, area: Rect) {
+fn render_quit_prompt(frame: &mut Frame, area: Rect, p: Palette) {
     render_centered_modal(
         frame,
         area,
         "Unsaved buffers",
         vec![
-            Line::from("There are unsaved buffers."),
+            Line::from(Span::styled(
+                "There are unsaved buffers.",
+                Style::default().fg(p.foreground),
+            )),
             Line::from(Span::styled(
                 "s save │ d discard & quit │ c/<Esc> cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(p.muted),
             )),
         ],
+        p,
     );
 }
 
@@ -1220,9 +2699,52 @@ fn render_quit_prompt(frame: &mut Frame, area: Rect) {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
 
     fn test_app() -> App {
         App::new().unwrap()
+    }
+
+    use sextant_core::CredentialStore as _;
+
+    /// An in-memory [`CredentialStore`] double for hermetic credential tests.
+    #[derive(Default)]
+    struct InMemoryStore {
+        map: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    }
+
+    impl sextant_core::CredentialStore for InMemoryStore {
+        fn get(&self, key: &str) -> Option<String> {
+            self.map.lock().unwrap().get(key).cloned()
+        }
+        fn set(&self, key: &str, password: &str) -> Result<(), sextant_core::SextantError> {
+            self.map
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), password.to_string());
+            Ok(())
+        }
+    }
+
+    /// An app with a single TCP (Postgres) connection `pg` declaring `keyring_key`
+    /// "k", wired to the given credential store. The host is unreachable, so any
+    /// background connect attempt fails harmlessly.
+    fn app_with_pg(store: std::sync::Arc<dyn sextant_core::CredentialStore>) -> App {
+        let mut app = test_app();
+        app.credentials = store;
+        app.tree = TreePane::new(vec!["pg".into()]);
+        app.connection_configs = vec![sextant_core::Connection {
+            name: "pg".into(),
+            driver: sextant_core::Driver::Postgres,
+            host: Some("127.0.0.1".into()),
+            port: Some(1),
+            user: Some("u".into()),
+            database: Some("d".into()),
+            ssl_mode: None,
+            path: None,
+            keyring_key: Some("k".into()),
+        }];
+        app
     }
 
     #[test]
@@ -1394,6 +2916,255 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(!app.should_quit);
+    }
+
+    fn one_buffer_recovery(content: &str) -> Recovery {
+        Recovery {
+            orphans: vec![],
+            buffers: vec![swap::SwapBuffer {
+                path: None,
+                cursor: (0, 0),
+                content: content.to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn recovery_restore_loads_buffers_into_editor() {
+        let mut app = test_app();
+        app.recovery = Some(one_buffer_recovery("SELECT 99"));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.recovery.is_none());
+        assert!(app.editor_open, "restore should open the editor");
+        assert_eq!(app.editor.content(), "SELECT 99");
+    }
+
+    #[test]
+    fn recovery_discard_clears_prompt_without_opening_editor() {
+        let mut app = test_app();
+        app.recovery = Some(one_buffer_recovery("x"));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.recovery.is_none());
+        assert!(!app.editor_open);
+    }
+
+    fn press(app: &mut App, c: char) {
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
+    fn save_snippet_requires_content_and_prompts() {
+        let mut app = test_app();
+        app.begin_save_snippet();
+        assert!(
+            app.snippet_prompt.is_none(),
+            "an empty editor should not prompt for a snippet name"
+        );
+
+        app.editor.set_content("SELECT 1");
+        app.begin_save_snippet();
+        assert!(
+            app.snippet_prompt.is_some(),
+            "a non-empty editor should prompt for a snippet name"
+        );
+    }
+
+    #[test]
+    fn snippets_loaded_opens_fuzzy_picker() {
+        let mut app = test_app();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.handle_msg(
+            AppMsg::SnippetsLoaded(vec![sextant_state::Snippet {
+                name: "recent".into(),
+                body: "SELECT * FROM t".into(),
+            }]),
+            &tx,
+        );
+        assert!(
+            app.fuzzy.is_some(),
+            "loading snippets should open the picker"
+        );
+    }
+
+    #[test]
+    fn command_palette_opens_filters_and_closes() {
+        let mut app = test_app();
+        press(&mut app, ' ');
+        press(&mut app, ':');
+        assert!(
+            app.fuzzy.is_some(),
+            "<Space>: should open the command palette"
+        );
+
+        // Typing edits the query (not navigation) and filters the list.
+        press(&mut app, 'h');
+        let visible = app.fuzzy.as_ref().unwrap().visible_labels().len();
+        assert!((1..10).contains(&visible), "query should filter commands");
+
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.fuzzy.is_none());
+    }
+
+    #[test]
+    fn help_overlay_toggles_with_leader_question_and_any_key() {
+        let mut app = test_app();
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('?'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.show_help, "<Space>? should open help");
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('j'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.show_help, "any key should close help");
+    }
+
+    #[test]
+    fn password_prompt_captures_input_and_cancels() {
+        let mut app = test_app();
+        app.password_prompt = Some(PasswordPrompt {
+            name: "pg".into(),
+            conn_idx: 0,
+            keyring_key: "k".into(),
+            input: String::new(),
+        });
+        for c in ['s', '3'] {
+            app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::NONE,
+            )));
+        }
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.password_prompt.as_ref().unwrap().input, "s");
+
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.password_prompt.is_none());
+    }
+
+    #[tokio::test]
+    async fn start_connection_consults_store_then_prompts() {
+        let store = std::sync::Arc::new(InMemoryStore::default());
+        let mut app = app_with_pg(store.clone());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Empty store + keyring_key on a TCP driver → masked prompt, no connect.
+        app.start_connection("pg", 0, &tx);
+        let prompt = app.password_prompt.as_ref().expect("should prompt");
+        assert_eq!(prompt.keyring_key, "k");
+
+        // With the secret in the store, the same connection skips the prompt and
+        // proceeds to connect (proving the injected store is consulted).
+        app.password_prompt = None;
+        store.set("k", "sekret").unwrap();
+        app.start_connection("pg", 0, &tx);
+        assert!(app.password_prompt.is_none());
+        assert_eq!(app.connection_name.as_deref(), Some("pg (connecting)"));
+    }
+
+    #[test]
+    fn persist_pending_credential_saves_on_match_and_clears() {
+        let store = std::sync::Arc::new(InMemoryStore::default());
+        let mut app = app_with_pg(store.clone());
+        app.pending_credential = Some(PendingCredential {
+            name: "pg".into(),
+            keyring_key: "k".into(),
+            password: "sekret".into(),
+        });
+
+        app.persist_pending_credential("pg");
+
+        assert_eq!(store.get("k").as_deref(), Some("sekret"));
+        assert!(app.pending_credential.is_none());
+    }
+
+    #[test]
+    fn persist_pending_credential_ignores_other_connections() {
+        let store = std::sync::Arc::new(InMemoryStore::default());
+        let mut app = app_with_pg(store.clone());
+        app.pending_credential = Some(PendingCredential {
+            name: "pg".into(),
+            keyring_key: "k".into(),
+            password: "sekret".into(),
+        });
+
+        // A different connection succeeding must not store pg's password.
+        app.persist_pending_credential("other");
+
+        assert_eq!(store.get("k"), None);
+        assert!(app.pending_credential.is_some());
+    }
+
+    #[test]
+    fn failed_connection_discards_pending_credential() {
+        let store = std::sync::Arc::new(InMemoryStore::default());
+        let mut app = app_with_pg(store.clone());
+        app.pending_credential = Some(PendingCredential {
+            name: "pg".into(),
+            keyring_key: "k".into(),
+            password: "sekret".into(),
+        });
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        app.handle_msg(
+            AppMsg::ConnectionFailed {
+                name: "pg".into(),
+                error: "auth failed".into(),
+            },
+            &tx,
+        );
+
+        // A wrong password must not be persisted, and must not linger.
+        assert_eq!(store.get("k"), None);
+        assert!(app.pending_credential.is_none());
+    }
+
+    #[test]
+    fn dangerous_editor_sql_requires_confirmation() {
+        let mut app = test_app();
+        app.connection_name = Some("c".into());
+        app.editor.set_content("DROP TABLE users");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.run_editor_sql(&tx);
+        assert!(
+            app.pending_dangerous.is_some(),
+            "DDL should stage a confirmation modal"
+        );
+    }
+
+    #[test]
+    fn safe_editor_sql_runs_without_prompt() {
+        let mut app = test_app();
+        app.connection_name = Some("c".into());
+        app.editor.set_content("SELECT 1");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.run_editor_sql(&tx);
+        assert!(
+            app.pending_dangerous.is_none(),
+            "a plain SELECT should not prompt"
+        );
     }
 
     #[test]
@@ -1819,6 +3590,21 @@ mod tests {
     }
 
     #[test]
+    fn browse_table_builds_select_with_limit_500() {
+        let mut app = app_with_users_table();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        app.browse_table(0, 0, 0, &tx);
+
+        // §7.1 / §17.4: browse runs `SELECT * FROM <tabla> LIMIT 500`,
+        // with the table reference quoted for the connection's driver.
+        assert_eq!(
+            app.last_browse_sql.as_deref(),
+            Some(r#"SELECT * FROM "main"."users" LIMIT 500"#)
+        );
+    }
+
+    #[test]
     fn d_emits_create_table_ddl_into_editor() {
         let mut app = app_with_users_table();
         // Lines: connection(0), schema(1), table(2).
@@ -1925,5 +3711,68 @@ mod tests {
         app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('c'))));
         assert!(!app.quit_prompt);
         assert!(!app.should_quit);
+    }
+
+    fn picker_with(actions: Vec<PickerAction>) -> Picker {
+        Picker {
+            title: "test".into(),
+            items: actions
+                .into_iter()
+                .enumerate()
+                .map(|(i, action)| PickerItem {
+                    label: format!("item {i}"),
+                    action,
+                })
+                .collect(),
+            selected: 0,
+        }
+    }
+
+    #[test]
+    fn picker_navigation_wraps() {
+        let mut app = test_app();
+        app.picker = Some(picker_with(vec![
+            PickerAction::LoadSql("a".into()),
+            PickerAction::LoadSql("b".into()),
+        ]));
+
+        // k from the first item wraps to the last.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('k'))));
+        assert_eq!(app.picker.as_ref().unwrap().selected, 1);
+        // j from the last item wraps back to the first.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('j'))));
+        assert_eq!(app.picker.as_ref().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn picker_select_loads_sql_into_editor() {
+        let mut app = test_app();
+        app.picker = Some(picker_with(vec![
+            PickerAction::LoadSql("SELECT 1".into()),
+            PickerAction::LoadSql("SELECT 2".into()),
+        ]));
+
+        // Move to the second entry and select it.
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('j'))));
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Enter)));
+
+        assert!(app.picker.is_none(), "picker should close after selection");
+        assert!(app.editor_open, "selecting loads the query into the editor");
+        assert_eq!(app.editor.content(), "SELECT 2");
+    }
+
+    #[test]
+    fn picker_esc_dismisses_without_action() {
+        let mut app = test_app();
+        app.picker = Some(picker_with(vec![PickerAction::LoadSql("SELECT 1".into())]));
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(app.picker.is_none());
+        assert!(!app.editor_open);
+    }
+
+    #[test]
+    fn truncate_shortens_long_strings() {
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("hello world", 5), "hell…");
     }
 }

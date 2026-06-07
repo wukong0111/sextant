@@ -17,9 +17,10 @@ Agent-facing reference for the `sextant` project. Read this first before making 
 | File | Purpose |
 |------|---------|
 | `ARCHITECTURE.md` | Code map: data flow, where each concern lives, non-obvious invariants/gotchas, and "how to add X" recipes. Read before touching code. |
-| `sextant-spec.md` | Full product specification (features, UI layout, keybindings, architecture). |
+| `SPEC.md` | Implementation-agnostic product specification: behavior, observable contracts, Given/When/Then acceptance criteria, and product rationale. The canonical "what". |
+| `docs/adr/` | Implementation decision records (the "how/why-of-how"; e.g. sqlx, lock-free txn flag). Each links its product requirement in `SPEC.md`. |
 | `plan.md` | Development roadmap split into phases (Fase 0–3). Check this before starting work. |
-| `MANUAL-QA.md` | Hands-on QA runbook: how to exercise each feature inside the TUI (setup, walkthrough, keybindings). Use to validate UI work that automated tests can't cover. |
+| `docs/coverage.md` | Binding from `SPEC.md` §17 acceptance criteria to concrete tests, plus the catalog of checks that only manual/visual verification can cover (color, real-TTY feel, PG/MySQL). |
 
 > **Note:** `CLAUDE.md` is a symlink to this file (`AGENTS.md`) — editing either edits both.
 > Project-specific workflows are available as slash-command skills in `.claude/skills/`
@@ -35,12 +36,14 @@ This is a Cargo workspace. The root `Cargo.toml` defines workspace metadata; all
 sextant/
 ├── Cargo.toml                 # workspace definition
 ├── plan.md                    # development plan
-├── sextant-spec.md            # product specification
+├── SPEC.md                    # agnostic product specification
+├── docs/adr/                  # implementation decision records
 └── crates/
     ├── sextant-cli/           # binary entry point (main.rs)
     ├── sextant-core/          # domain types, traits, shared errors
     ├── sextant-config/        # TOML config loading, XDG paths, keymaps
     ├── sextant-db/            # sqlx drivers, query execution, introspection
+    ├── sextant-state/         # local state.db (query history, recent files)
     └── sextant-ui/            # ratatui components, event loop, layout
 ```
 
@@ -50,6 +53,7 @@ sextant/
 - **`sextant-core`** — Domain primitives (`Driver`, `Connection`, `CellValue`, `QueryResult`, etc.) and the `QueryExecutor` trait. Kept lightweight with few dependencies.
 - **`sextant-config`** — Loads `connections.toml`, `config.toml`, and `keys.toml` from XDG-compliant paths (`~/.config/sextant/`). Validates per-driver required fields.
 - **`sextant-db`** — Implements `QueryExecutor` via `sqlx`. Manages per-connection connection pools. All DB I/O is async (`tokio`).
+- **`sextant-state`** — Owns the app's private local database (`state.db`): query history and recent-files ring. Async (`sqlx`/SQLite), independent of the user's connections.
 - **`sextant-ui`** — Owns the TUI event loop, state machine (`Normal` / `Insert` / `EditorOpen`), and all `ratatui` widgets (tree sidebar, result grid, editor modal, status line).
 
 ### Dependency Rules
@@ -58,7 +62,8 @@ sextant/
 - `sextant-ui` → `sextant-core`
 - `sextant-db` → `sextant-core`
 - `sextant-config` → `sextant-core`
-- Service crates (`sextant-db`, `sextant-config`) must compile and be testable without depending on `sextant-ui`.
+- `sextant-state` → `sextant-core`
+- Service crates (`sextant-db`, `sextant-config`, `sextant-state`) must compile and be testable without depending on `sextant-ui`.
 
 ---
 
@@ -103,6 +108,27 @@ The binary opens a TUI window. In the current Phase 0 implementation it shows a 
 
 - TUI integration tests can use `screen` to create a pseudo-tty, send `\x11` (`Ctrl+Q`), and verify exit code 0.
 - Database tests should use temporary SQLite files or test containers for PG/MySQL.
+
+### End-to-end TUI tests (PTY)
+
+The shared harness in `crates/sextant-cli/tests/common/mod.rs` (`Tui` + `Fixture`)
+drives the **real `sextant` binary** through a pseudo-terminal — the TUI analogue
+of a Playwright suite. It spawns the binary (`portable-pty`), parses its ANSI
+output into a virtual screen (`vt100`), and asserts on the rendered text.
+`tests/e2e.rs` holds the assertions; `tests/smoke.rs` holds `#[ignore]`d
+on-demand "screenshots" for eyeballing the live app. Key points:
+
+- **Hermetic**: a temp `HOME`/`XDG_CONFIG_HOME`/`XDG_DATA_HOME` plus a seeded
+  SQLite file (`rusqlite`) — no Docker, no touching the user's config.
+- **Auto-wait, not sleep**: `Tui::wait_for(needle, timeout)` polls the parsed
+  screen until the expected text appears (like `expect().toBeVisible()`).
+- **Pace keystrokes**: each key write is followed by a short delay; a lone `Esc`
+  needs an extra pause so crossterm doesn't read it as an escape sequence.
+- **Cross-check the backend**: tests can assert on `state.db` (in the temp
+  `XDG_DATA_HOME`) after driving the UI — e.g. that a run query was recorded.
+
+Run with `make e2e` (PTY tests, no Docker) or `make smoke` (print live
+screenshots without a TTY).
 
 ### Integration Tests with Docker
 
@@ -186,6 +212,14 @@ When the user says "vamos con la Fase X" or "implementa el punto Y":
 6. **Plan/code sync: correctness wins.** If the implementation diverges from `plan.md` for technical reasons (compiler constraints, warnings, better practices, discovered blockers), update `plan.md` to reflect the actual code. The plan is a living document; correctness of the code always takes precedence over literal fidelity to the plan. Document the reason for the divergence in the plan or the commit message.
 7. **If blocked, stop and report.** Do not improvise solutions to unplanned problems without consulting. Document blockers in the plan or an issue.
 
+### Documentation discipline
+
+A change touches **only the docs its kind implies**: `SPEC.md` for observable
+behavior/contracts (with a matching §17 Given/When/Then), a **new immutable** ADR
+in `docs/adr/` for noteworthy implementation decisions, `ARCHITECTURE.md` for
+structural changes, `plan.md` always (status + commit hash). Spec-first; keep
+`SPEC.md` agnostic. Full rules, litmus and ordering: **`docs/documentation-guide.md`**.
+
 ---
 
 ## Behavioral Guidelines (for LLM Agents)
@@ -209,6 +243,9 @@ When the user says "vamos con la Fase X" or "implementa el punto Y":
 | `cargo test -p <crate>` | Run one crate's tests (e.g. `-p sextant-db`) |
 | `cargo run` | Start the TUI |
 | `cargo run --bin sextant` | Same as above (explicit binary) |
+| `make check` | Full verification: compile, test, fmt check, clippy |
+| `make e2e` | PTY end-to-end tests (SQLite only, no Docker) |
+| `make smoke` | Print live "screenshots" of the running TUI (no TTY) |
 | `make seed-sqlite` | Seed the local `test.db` (SQLite) |
 | `make seed` | Seed all DBs (PostgreSQL, MySQL, SQLite) |
 | `make test-db` | Full cycle: start Docker DBs, run tests, tear down |
@@ -216,6 +253,6 @@ When the user says "vamos con la Fase X" or "implementa el punto Y":
 | File | What to read when... |
 |------|----------------------|
 | `plan.md` | Starting a new phase or task |
-| `sextant-spec.md` | Need product-level context (features, UI, keybindings) |
+| `SPEC.md` | Need product-level context (behavior, UI, keybindings, acceptance criteria) |
 | `Cargo.toml` (root) | Workspace metadata |
 | `crates/*/Cargo.toml` | Crate dependencies and features |

@@ -3,9 +3,11 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Borders, List, ListItem},
 };
+
+use crate::palette::Palette;
 
 /// A column node shown under an expanded table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +106,7 @@ struct Line {
 pub struct TreePane {
     pub connections: Vec<ConnectionItem>,
     pub selected: usize,
+    palette: Palette,
 }
 
 impl TreePane {
@@ -118,7 +121,13 @@ impl TreePane {
                 })
                 .collect(),
             selected: 0,
+            palette: Palette::default(),
         }
+    }
+
+    /// Set the color palette used when rendering.
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
     }
 
     /// Move selection down.
@@ -209,6 +218,30 @@ impl TreePane {
     /// Name of the table at `(conn, schema, table)`, if connected.
     pub fn table_name(&self, conn: usize, schema: usize, table: usize) -> Option<String> {
         self.table_ref(conn, schema, table).map(|t| t.name.clone())
+    }
+
+    /// Enumerate every table of every connected connection as
+    /// `(conn, schema, table, conn_name, schema_name, table_name)`, for the
+    /// fuzzy table finder.
+    pub fn browseable_tables(&self) -> Vec<(usize, usize, usize, String, String, String)> {
+        let mut out = Vec::new();
+        for (ci, conn) in self.connections.iter().enumerate() {
+            if let ConnState::Connected { schemas, .. } = &conn.state {
+                for (si, schema) in schemas.iter().enumerate() {
+                    for (ti, table) in schema.tables.iter().enumerate() {
+                        out.push((
+                            ci,
+                            si,
+                            ti,
+                            conn.name.clone(),
+                            schema.name.clone(),
+                            table.name.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Whether the table at `(conn, schema, table)` is currently expanded.
@@ -378,9 +411,11 @@ impl TreePane {
             .enumerate()
             .map(|(i, line)| {
                 let style = if i == self.selected {
-                    Style::default().bg(Color::DarkGray)
-                } else {
                     Style::default()
+                        .fg(self.palette.selection_fg)
+                        .bg(self.palette.selection_bg)
+                } else {
+                    Style::default().fg(self.palette.foreground)
                 };
                 ListItem::new(line.text.clone()).style(style)
             })

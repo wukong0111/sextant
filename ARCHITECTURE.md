@@ -1,7 +1,7 @@
 # ARCHITECTURE.md
 
 A code map and orientation guide for `sextant`. Read this alongside `AGENTS.md`
-(project facts, workflow) and `sextant-spec.md` (product spec). The goal is to
+(project facts, workflow) and `SPEC.md` (agnostic product spec). The goal is to
 save you from re-deriving the non-obvious wiring every session.
 
 Symbols are referenced **by name** so you can `grep` for them — line numbers
@@ -51,6 +51,7 @@ tasks; their results return as `AppMsg` variants over an
 | Schema/table introspection | `crates/sextant-db/src/introspection.rs` |
 | Connection-URL construction per driver | `crates/sextant-db/src/url_builder.rs` |
 | Config load / validation / XDG paths / password lookup | `crates/sextant-config/src/{lib,parser,validation,paths}.rs` |
+| Local `state.db` (query history, recent-files ring) | `crates/sextant-state/src/lib.rs` |
 | Domain types & `QueryExecutor` trait | `crates/sextant-core/src/lib.rs` |
 
 Public DB surface is re-exported from `sextant-db/src/lib.rs`:
@@ -98,10 +99,19 @@ These are the things that bite you if you don't know them.
   (`introspection::introspect_schemas_and_tables`) before the tree is
   populated; on large schemas this latency is user-visible.
 
-- **Password resolution (v0.1).** `connection_password(name)` reads env var
-  `SEXTANT_<NAME>_PASSWORD`, where `<NAME>` is the connection name uppercased
-  with spaces and `-` replaced by `_` (`sextant-config/src/lib.rs`). Keyring is
-  planned (Fase 3) but **not implemented** — `keyring_key` is parsed but unused.
+- **Password resolution.** On connect, `start_connection` (`ui/src/lib.rs`) looks
+  up the keyring via the injected `App::credentials: Arc<dyn CredentialStore>`
+  (`core`) and the env-var fallback `connection_password(name)`
+  (`SEXTANT_<NAME>_PASSWORD`, name uppercased with spaces/`-` → `_`), then the
+  pure `resolve_password` (`sextant-config`) decides the cascade: keyring wins
+  over env; with neither, a TCP driver declaring a `keyring_key` prompts,
+  otherwise it connects passwordless. On a successful connect the prompt-entered
+  password is persisted: `confirm_password_prompt` stashes it in
+  `App::pending_credential`, and the `AppMsg::Connected` handler calls
+  `persist_pending_credential`, which writes it via the `CredentialStore` (a
+  failed connect discards it). The production store is `KeyringStore`
+  (`sextant-config`, service `"sextant"`); tests inject an in-memory double. This
+  seam is what makes the cascade + save testable — see ADR-0005.
 
 - **State machine.** `Mode { Normal, Insert }` (editing text), `Focus { Tree,
   Grid }` (Tab toggles), and the boolean `editor_open` (modal overlay). These
@@ -117,7 +127,7 @@ These are the things that bite you if you don't know them.
 
 - **A keybinding:** add a branch in `App::handle_key_event` (mind the current
   `Mode`/`Focus` and `pending_leader`/`pending_g` chord state). Document it in
-  `sextant-spec.md` §9.
+  `SPEC.md` §12 (interaction model / default keymap).
 
 - **A driver capability:** enable the `sqlx` feature in the workspace
   `Cargo.toml`, extend `build_connection_url` (`url_builder.rs`), add the

@@ -21,6 +21,24 @@ pub fn config_dir() -> PathBuf {
 /// Returns the directory where saved `.sql` queries live
 /// (`$XDG_DATA_HOME/sextant/queries` or `~/.local/share/sextant/queries`).
 pub fn queries_dir() -> PathBuf {
+    data_dir().join("queries")
+}
+
+/// Returns the directory where custom theme files live
+/// (`$XDG_CONFIG_HOME/sextant/themes` or `~/.config/sextant/themes`).
+pub fn themes_dir() -> PathBuf {
+    config_dir().join("themes")
+}
+
+/// Returns the directory where exported result sets are written
+/// (`$XDG_DATA_HOME/sextant/exports` or `~/.local/share/sextant/exports`).
+pub fn exports_dir() -> PathBuf {
+    data_dir().join("exports")
+}
+
+/// Returns the sextant data directory
+/// (`$XDG_DATA_HOME/sextant` or `~/.local/share/sextant`).
+fn data_dir() -> PathBuf {
     let data = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         PathBuf::from(xdg)
     } else {
@@ -29,7 +47,33 @@ pub fn queries_dir() -> PathBuf {
             .join(".local")
             .join("share")
     };
-    data.join("sextant").join("queries")
+    data.join("sextant")
+}
+
+/// Returns the path to the local application state database
+/// (`$XDG_DATA_HOME/sextant/state.db` or `~/.local/share/sextant/state.db`).
+pub fn state_db_path() -> PathBuf {
+    data_dir().join("state.db")
+}
+
+/// Returns the XDG state directory for sextant
+/// (`$XDG_STATE_HOME/sextant` or `~/.local/state/sextant`).
+fn state_dir() -> PathBuf {
+    let state = if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
+        PathBuf::from(xdg)
+    } else {
+        dirs::home_dir()
+            .expect("home directory must be available")
+            .join(".local")
+            .join("state")
+    };
+    state.join("sextant")
+}
+
+/// Returns the directory where editor swap files live
+/// (`$XDG_STATE_HOME/sextant/swap` or `~/.local/state/sextant/swap`).
+pub fn swap_dir() -> PathBuf {
+    state_dir().join("swap")
 }
 
 /// Resolve a user-provided query name to a path inside [`queries_dir`],
