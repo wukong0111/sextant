@@ -90,8 +90,8 @@ These are the things that bite you if you don't know them.
 - **`DbPool` is typed-per-backend, not `sqlx::Any`.** `DbPool` is an enum:
   `Postgres(PgPool)` / `MySql(MySqlPool)` / `Sqlite(SqlitePool)`
   (`executor.rs`). `sqlx::Any` was abandoned because it can't decode SQLite's
-  `BOOLEAN` (`SqliteTypeInfo(Bool)`), which made `fetch_all` fail. See
-  `plan.md` (Fase 1.2 notes, "fix SQLite BOOLEAN"). When adding a backend you
+  `BOOLEAN` (`SqliteTypeInfo(Bool)`), which made `fetch_all` fail (git: commit
+  `4a2636e`). When adding a backend you
   add a `DbPool` variant and a `match` arm — there is no generic path.
 
 - **Row mapping uses an ordered fallback.** In `executor.rs`, each cell is

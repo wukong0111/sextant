@@ -1,44 +1,48 @@
 ---
 name: plan-task
-description: Guided workflow to implement a task from plan.md following sextant's development process. Use when the user says "vamos con la Fase X", "implementa el punto Y", or otherwise asks to pick up a roadmap task.
+description: Guided workflow to implement a feature or roadmap/backlog item following sextant's spec- and test-first process. Use when the user says "implementa X", asks to pick up a backlog item from plan.md, or starts a new feature.
 ---
 
 # plan-task
 
-Drive a `plan.md` task through the project's Code → Verify → Commit → update-plan
-loop. This operationalizes the "Development Workflow" in `AGENTS.md`.
+Drive a feature or `plan.md` backlog item through the project's spec- and
+test-first lifecycle. This operationalizes the "Development Workflow" in
+`AGENTS.md` and the lifecycle in `docs/documentation-guide.md`.
 
 ## Steps
 
-1. **Read `plan.md` first.** Identify the requested task and confirm whether it
-   is `⬜` (pending) or already `✅`. Do not assume it's undone — verify in the
-   code. Read `ARCHITECTURE.md` for where the relevant concern lives.
+1. **Read `plan.md` and `SPEC.md` first.** Identify the item; don't assume it's
+   done or undone — verify in the code. Read `ARCHITECTURE.md` for where the
+   relevant concern lives.
 
-2. **Confirm scope.** Ask whether the user wants the full phase or a specific
-   subset. If multiple technical approaches exist, present trade-offs and wait
-   for a decision before coding.
+2. **Confirm scope.** If multiple technical approaches exist, present trade-offs
+   and wait for a decision before coding.
 
-3. **Code.** Make minimal, surgical changes. Every modified line should trace to
-   the task. Clean up orphaned imports/vars you introduce.
+3. **Spec (if behavior changes).** Add/adjust the `SPEC.md` §17 Given/When/Then
+   first. The criterion is the prose form of the test. A pure refactor skips
+   this; a bug fix that aligns code with the spec skips it too.
 
-4. **Verify.** Run the `workspace-check` skill (check, test, fmt --check,
-   clippy). For TUI-affecting changes, also `cargo run` and confirm clean
-   start/quit (`Ctrl+Q`).
+4. **Test (red).** Translate the criterion into the strongest feasible tier
+   (UNIT → APP → E2E) and add its row to `docs/coverage.md`. It fails first.
+   Slice that only a human can verify → the manual catalog in `coverage.md`.
 
-5. **Commit atomically** with a descriptive message scoped to the task.
+5. **Code (green).** Minimal, surgical changes that make the tests pass. Every
+   modified line traces to the item; clean up orphans you introduce.
 
-6. **Update `plan.md`.** Mark the task `[x] ✅` and add the commit hash to the
-   progress table.
-   - **Commit-hash ordering:** if `plan.md` must reference the hash of the code
-     just committed, do it in **two commits** — (1) commit the code, (2) commit
-     the `plan.md` update with the real hash. **Never `git commit --amend`** to
-     inject the hash; amending changes the hash and creates a stale reference.
+6. **Verify.** Run the `workspace-check` skill (check, test, fmt --check,
+   clippy). For TUI changes, also `cargo run` and confirm clean start/quit
+   (`Ctrl+Q`).
 
-7. **If blocked,** stop and report. Document the blocker in `plan.md`; don't
-   improvise solutions to unplanned problems.
+7. **Commit atomically** with a descriptive message. Then document: ADR if a
+   noteworthy technical decision was made, `ARCHITECTURE.md` if structure
+   changed, and `plan.md` **only if a roadmap item changed status** (no
+   per-commit hash — git is the log).
+
+8. **If blocked,** stop and report; don't improvise solutions to unplanned
+   problems.
 
 ## Sync rule
 
-If the implementation must diverge from `plan.md` for technical reasons, update
-`plan.md` to match the code and note why. Correctness of the code wins over
+If the implementation must diverge from the spec/plan for technical reasons,
+update the doc to match the code and note why. Correctness of the code wins over
 literal fidelity to the plan.

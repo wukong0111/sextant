@@ -17,7 +17,7 @@ Agent-facing reference for the `sextant` project. Read this first before making 
 | `ARCHITECTURE.md` | Code map: data flow, crates & dependency rules, where each concern lives, invariants/gotchas, "how to add X". Read before touching code. |
 | `SPEC.md` | Implementation-agnostic product spec: behavior, observable contracts, §17 Given/When/Then acceptance criteria, §16 security requirements, product rationale. The canonical "what". |
 | `docs/adr/` | Implementation decision records (the "how/why-of-how"). Each links its requirement in `SPEC.md`. |
-| `plan.md` | Development roadmap split into phases (Fase 0–3). Check before starting work. |
+| `plan.md` | Forward-looking roadmap: deferred backlog + post-v1 work. Shipped phases live in git history. Check before starting new work. |
 | `docs/coverage.md` | Binding from `SPEC.md` §17 criteria to concrete tests, plus the catalog of manual/visual-only checks. |
 | `docs/documentation-guide.md` | Which doc a change must touch, the litmus, and ordering rules. |
 
@@ -34,7 +34,7 @@ Cargo workspace; the root `Cargo.toml` is metadata, all code lives in `crates/`.
 ```
 sextant/
 ├── Cargo.toml                 # workspace definition
-├── plan.md                    # development roadmap
+├── plan.md                    # roadmap / backlog (post-v1)
 ├── SPEC.md                    # agnostic product spec
 ├── docs/adr/                  # implementation decision records
 └── crates/
@@ -82,18 +82,16 @@ Full requirements in **`SPEC.md` §16**. Do not regress these:
 
 ## Development Workflow
 
-When the user says "vamos con la Fase X" or "implementa el punto Y" (the `plan-task` skill drives this loop):
+When the user asks to pick up a roadmap/backlog item or implement a feature (the `plan-task` skill drives this loop):
 
-1. **Read `plan.md` first.** Check what is ✅ vs ⬜. Don't assume a task is done without verifying it in the code.
+1. **Read `plan.md` and `SPEC.md` first.** Don't assume something is done or undone without verifying it in the code.
 2. **Present options before acting.** If multiple approaches exist (library A vs B, architecture X vs Y), present tradeoffs and wait for a decision.
-3. **Define the scope.** Ask whether the user wants the full phase or a specific subset.
+3. **Define the scope.** Confirm how much the user wants done.
 4. **Spec → Test → Code → Verify → Commit.** Follow the spec- and test-first lifecycle in **`docs/documentation-guide.md`**: behavior change → §17 criterion → failing test (or manual-catalog entry) → minimal code → `make check` → atomic commit. Every task needs a verifiable success criterion.
-5. **Update the plan immediately.** Mark the task `[x] ✅` in `plan.md` and add the commit hash to the progress table.
-   - **Commit-hash ordering:** if `plan.md` must reference the hash of the change being committed, do it in two steps — (1) commit the code, (2) update `plan.md` with the real hash in a follow-up commit. Never `git commit --amend` to inject the hash; the amend changes the hash and creates an inconsistent reference.
-6. **Plan/code sync: correctness wins.** If the implementation diverges from `plan.md` for technical reasons, update `plan.md` to match the code and document why. The plan is a living document.
-7. **If blocked, stop and report.** Don't improvise solutions to unplanned problems without consulting.
+5. **Update `plan.md` only if a roadmap item changed status** (shipped, started, or newly deferred). No per-commit hash — git is the log.
+6. **If blocked, stop and report.** Don't improvise solutions to unplanned problems without consulting.
 
-**Documentation discipline:** a change touches **only the docs its kind implies** — `SPEC.md` for observable behavior/contracts (with a matching §17 Given/When/Then), a **new immutable** ADR for noteworthy implementation decisions, `ARCHITECTURE.md` for structural changes, `plan.md` always (status + hash). Spec-first; keep `SPEC.md` agnostic. Full rules in **`docs/documentation-guide.md`**.
+**Documentation discipline:** a change touches **only the docs its kind implies** — `SPEC.md` for observable behavior/contracts (with a matching §17 Given/When/Then), a **new immutable** ADR for noteworthy implementation decisions, `ARCHITECTURE.md` for structural changes, `plan.md` only when a roadmap item changes status (git is the per-commit log). Spec-first; keep `SPEC.md` agnostic. Full rules in **`docs/documentation-guide.md`**.
 
 > Turn vague requests into verifiable criteria before coding ("fix the bug" → "write a failing test, then make it pass"). State assumptions; if something is unclear or has multiple readings, ask instead of guessing.
 

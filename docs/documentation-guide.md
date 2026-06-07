@@ -11,7 +11,7 @@ carries a short pointer to it.
 | `SPEC.md` | the **observable behavior or a contract** changes — new feature, changed default keybinding, export/import format, security rule. Add/adjust the matching **Given/When/Then** criterion in §17. | it's a refactor or an implementation swap with no observable effect. |
 | `docs/adr/` | you make a **non-obvious implementation decision** (new library, new mechanism, or superseding a prior one) → write a **new** ADR. ADRs are **immutable**: never edit an accepted one; a new ADR marks the old as *superseded*. | the change carries no noteworthy technical decision. |
 | `ARCHITECTURE.md` | the **code structure/wiring** changes — new crate/module, a concern moves, a new invariant. | code moves within what's already documented. |
-| `plan.md` | always, as work advances — task status and commit hash (the log). | — |
+| `plan.md` | a **roadmap/backlog item** changes status — started, shipped, or newly deferred. | it's routine work that doesn't move a roadmap item; **git** is the commit log. |
 
 ## Litmus for `SPEC.md`
 
@@ -43,7 +43,8 @@ mirror this change?* If yes → spec. Concretely:
 5. **Document** — ADR if a noteworthy technical decision was made;
    `ARCHITECTURE.md` if the structure/wiring changed; finalize the `coverage.md`
    row (definitive tier).
-6. **Log** — `plan.md` status + commit hash, and commit atomically.
+6. **Log** — commit atomically (git is the per-commit log); update `plan.md`
+   only if a roadmap/backlog item changed status.
 
 **Conditionals.** A refactor or library swap skips steps 1–2 (no observable
 change) but still needs an ADR if the decision is noteworthy. A bug fix that
