@@ -37,3 +37,4 @@ Plantilla [Nygard](https://cognitect.com/blog/2011/11/15/documenting-architectur
 | [0002](0002-concurrencia-optimista-en-commits-del-grid.md) | Concurrencia optimista en los commits del grid | Aceptado |
 | [0003](0003-modelo-de-transacciones-hibrido-psql.md) | Modelo de transacciones híbrido psql-style | Aceptado |
 | [0004](0004-credenciales-via-keyring-del-so.md) | Credenciales vía keyring del SO | Aceptado |
+| [0005](0005-credential-store-inyectable-para-testabilidad.md) | `CredentialStore` inyectable para testabilidad | Aceptado |

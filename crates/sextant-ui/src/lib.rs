@@ -1,4 +1,5 @@
 use std::io::{self, Stdout, stdout};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -144,6 +145,17 @@ struct PasswordPrompt {
     input: String,
 }
 
+/// A password entered at the prompt, awaiting a successful connection before it
+/// is persisted to the credential store (§3.2 "save after connect").
+struct PendingCredential {
+    /// Connection whose success triggers the save.
+    name: String,
+    /// Key to store the password under.
+    keyring_key: String,
+    /// The password to persist.
+    password: String,
+}
+
 /// A destructive editor statement awaiting confirmation before it runs.
 struct DangerousStmt {
     /// Connection whose executor will run the statement.
@@ -225,6 +237,10 @@ pub struct App {
     snippet_prompt: Option<String>,
     /// Interactive password prompt, if a connection needs one.
     password_prompt: Option<PasswordPrompt>,
+    /// Credential store (OS keyring in production; injectable in tests).
+    credentials: Arc<dyn sextant_core::CredentialStore>,
+    /// Password entered at the prompt, pending a successful connection to save.
+    pending_credential: Option<PendingCredential>,
     /// Orphan-swap recovery prompt shown at startup, if any.
     recovery: Option<Recovery>,
     /// This session's swap file path (`session-<pid>.swp`).
@@ -299,6 +315,8 @@ impl App {
             fuzzy: None,
             snippet_prompt: None,
             password_prompt: None,
+            credentials: Arc::new(sextant_config::KeyringStore),
+            pending_credential: None,
             recovery: None,
             session_swap: swap::session_swap_path(),
             last_swap: Instant::now(),
@@ -954,53 +972,76 @@ impl App {
             return;
         };
 
-        // Resolve the password: keyring (by `keyring_key`) first, then the
-        // env-var fallback. A connection that has a `keyring_key` but no stored
-        // secret (and a driver that authenticates) prompts the user.
+        // Resolve the password per the §3.2 cascade. The lookups (keyring via the
+        // injected store, then the env-var fallback) are the only I/O here; the
+        // ordering/decision lives in the pure `resolve_password`.
         let from_keyring = config
             .keyring_key
             .as_deref()
-            .and_then(sextant_config::password_from_keyring);
-        let password = from_keyring.or_else(|| sextant_config::connection_password(name));
+            .and_then(|k| self.credentials.get(k));
+        let from_env = sextant_config::connection_password(name);
 
-        if password.is_none() && config.driver != sextant_core::Driver::Sqlite {
-            if let Some(keyring_key) = config.keyring_key.clone() {
+        match sextant_config::resolve_password(
+            config.driver,
+            config.keyring_key.as_deref(),
+            from_keyring,
+            from_env,
+        ) {
+            sextant_config::PasswordResolution::Connect(password) => {
+                self.spawn_connect(name.to_string(), conn_idx, password, tx);
+            }
+            sextant_config::PasswordResolution::Prompt { keyring_key } => {
                 self.password_prompt = Some(PasswordPrompt {
                     name: name.to_string(),
                     conn_idx,
                     keyring_key,
                     input: String::new(),
                 });
-                return;
             }
         }
-
-        self.spawn_connect(name.to_string(), conn_idx, password, None, tx);
     }
 
     /// Submit the entered password: connect with it and, on success, store it in
-    /// the keyring under the connection's `keyring_key`.
+    /// the keyring under the connection's `keyring_key`. The save is deferred to
+    /// [`App::persist_pending_credential`], run when the connection succeeds.
     fn confirm_password_prompt(&mut self, tx: &UnboundedSender<AppMsg>) {
         let Some(prompt) = self.password_prompt.take() else {
             return;
         };
-        self.spawn_connect(
-            prompt.name,
-            prompt.conn_idx,
-            Some(prompt.input),
-            Some(prompt.keyring_key),
-            tx,
-        );
+        self.pending_credential = Some(PendingCredential {
+            name: prompt.name.clone(),
+            keyring_key: prompt.keyring_key,
+            password: prompt.input.clone(),
+        });
+        self.spawn_connect(prompt.name, prompt.conn_idx, Some(prompt.input), tx);
     }
 
-    /// Spawn the async connect + introspection. When `store_key` is `Some` and
-    /// the connection succeeds, the password is saved to the keyring under it.
+    /// Persist a prompt-entered password to the credential store once its
+    /// connection succeeds (§3.2 "save after connect"). No-op unless a pending
+    /// credential matches `name`; clears it either way.
+    fn persist_pending_credential(&mut self, name: &str) {
+        if self
+            .pending_credential
+            .as_ref()
+            .is_none_or(|p| p.name != name)
+        {
+            return;
+        }
+        let pending = self.pending_credential.take().unwrap();
+        if let Err(e) = self
+            .credentials
+            .set(&pending.keyring_key, &pending.password)
+        {
+            tracing::warn!("failed to store password in keyring: {e}");
+        }
+    }
+
+    /// Spawn the async connect + introspection.
     fn spawn_connect(
         &mut self,
         name: String,
         conn_idx: usize,
         password: Option<String>,
-        store_key: Option<String>,
         tx: &UnboundedSender<AppMsg>,
     ) {
         let Some(config) = self
@@ -1023,12 +1064,6 @@ impl App {
             match mgr.connect(&name, &config, password.as_deref()).await {
                 Ok(executor) => match executor.introspect_schemas_and_tables(config.driver).await {
                     Ok(schemas) => {
-                        // Persist the working credential for next time.
-                        if let (Some(key), Some(pw)) = (&store_key, &password) {
-                            if let Err(e) = sextant_config::store_password_in_keyring(key, pw) {
-                                tracing::warn!("failed to store password in keyring: {e}");
-                            }
-                        }
                         let mut metadata = std::collections::HashMap::new();
                         for schema in &schemas {
                             match executor
@@ -1108,11 +1143,21 @@ impl App {
                 }
                 self.executors.insert(name.clone(), executor);
                 self.table_meta.insert(name.clone(), metadata);
+                // A prompt-entered password is now known to work: persist it.
+                self.persist_pending_credential(&name);
                 self.connection_name = Some(name);
             }
             AppMsg::ConnectionFailed { name, error } => {
                 if let Some(idx) = self.tree.connection_index_by_name(&name) {
                     self.tree.set_error(idx, error.clone());
+                }
+                // Don't keep a password that failed to connect.
+                if self
+                    .pending_credential
+                    .as_ref()
+                    .is_some_and(|p| p.name == name)
+                {
+                    self.pending_credential = None;
                 }
                 self.connection_name = Some(format!("{name}: {error}"));
             }
@@ -2660,6 +2705,48 @@ mod tests {
         App::new().unwrap()
     }
 
+    use sextant_core::CredentialStore as _;
+
+    /// An in-memory [`CredentialStore`] double for hermetic credential tests.
+    #[derive(Default)]
+    struct InMemoryStore {
+        map: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    }
+
+    impl sextant_core::CredentialStore for InMemoryStore {
+        fn get(&self, key: &str) -> Option<String> {
+            self.map.lock().unwrap().get(key).cloned()
+        }
+        fn set(&self, key: &str, password: &str) -> Result<(), sextant_core::SextantError> {
+            self.map
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), password.to_string());
+            Ok(())
+        }
+    }
+
+    /// An app with a single TCP (Postgres) connection `pg` declaring `keyring_key`
+    /// "k", wired to the given credential store. The host is unreachable, so any
+    /// background connect attempt fails harmlessly.
+    fn app_with_pg(store: std::sync::Arc<dyn sextant_core::CredentialStore>) -> App {
+        let mut app = test_app();
+        app.credentials = store;
+        app.tree = TreePane::new(vec!["pg".into()]);
+        app.connection_configs = vec![sextant_core::Connection {
+            name: "pg".into(),
+            driver: sextant_core::Driver::Postgres,
+            host: Some("127.0.0.1".into()),
+            port: Some(1),
+            user: Some("u".into()),
+            database: Some("d".into()),
+            ssl_mode: None,
+            path: None,
+            keyring_key: Some("k".into()),
+        }];
+        app
+    }
+
     #[test]
     fn app_default_state() {
         let app = test_app();
@@ -2975,6 +3062,83 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(app.password_prompt.is_none());
+    }
+
+    #[tokio::test]
+    async fn start_connection_consults_store_then_prompts() {
+        let store = std::sync::Arc::new(InMemoryStore::default());
+        let mut app = app_with_pg(store.clone());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Empty store + keyring_key on a TCP driver → masked prompt, no connect.
+        app.start_connection("pg", 0, &tx);
+        let prompt = app.password_prompt.as_ref().expect("should prompt");
+        assert_eq!(prompt.keyring_key, "k");
+
+        // With the secret in the store, the same connection skips the prompt and
+        // proceeds to connect (proving the injected store is consulted).
+        app.password_prompt = None;
+        store.set("k", "sekret").unwrap();
+        app.start_connection("pg", 0, &tx);
+        assert!(app.password_prompt.is_none());
+        assert_eq!(app.connection_name.as_deref(), Some("pg (connecting)"));
+    }
+
+    #[test]
+    fn persist_pending_credential_saves_on_match_and_clears() {
+        let store = std::sync::Arc::new(InMemoryStore::default());
+        let mut app = app_with_pg(store.clone());
+        app.pending_credential = Some(PendingCredential {
+            name: "pg".into(),
+            keyring_key: "k".into(),
+            password: "sekret".into(),
+        });
+
+        app.persist_pending_credential("pg");
+
+        assert_eq!(store.get("k").as_deref(), Some("sekret"));
+        assert!(app.pending_credential.is_none());
+    }
+
+    #[test]
+    fn persist_pending_credential_ignores_other_connections() {
+        let store = std::sync::Arc::new(InMemoryStore::default());
+        let mut app = app_with_pg(store.clone());
+        app.pending_credential = Some(PendingCredential {
+            name: "pg".into(),
+            keyring_key: "k".into(),
+            password: "sekret".into(),
+        });
+
+        // A different connection succeeding must not store pg's password.
+        app.persist_pending_credential("other");
+
+        assert_eq!(store.get("k"), None);
+        assert!(app.pending_credential.is_some());
+    }
+
+    #[test]
+    fn failed_connection_discards_pending_credential() {
+        let store = std::sync::Arc::new(InMemoryStore::default());
+        let mut app = app_with_pg(store.clone());
+        app.pending_credential = Some(PendingCredential {
+            name: "pg".into(),
+            keyring_key: "k".into(),
+            password: "sekret".into(),
+        });
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        app.handle_msg(
+            AppMsg::ConnectionFailed {
+                name: "pg".into(),
+                error: "auth failed".into(),
+            },
+            &tx,
+        );
+
+        // A wrong password must not be persisted, and must not linger.
+        assert_eq!(store.get("k"), None);
+        assert!(app.pending_credential.is_none());
     }
 
     #[test]

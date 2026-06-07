@@ -23,7 +23,7 @@ names on purpose; this mapping is per-implementation and lives here.
 | 6 | Grid de solo lectura | **UNIT** | `read_only_without_context_or_pk` |
 | 7 | Transacción de sesión psql-style | **UNIT** | `session_transaction_commits`, `session_transaction_rolls_back` (ve cambios no confirmados), `classifies_txn_control`. **Sin PTY** |
 | 8 | Guardia de operaciones destructivas | **APP+UNIT** | app: `dangerous_editor_sql_requires_confirmation`, `safe_editor_sql_runs_without_prompt`; unit: `dangerous_flags_unguarded_dml_and_ddl`, `dangerous_allows_guarded_dml_and_reads` |
-| 9 | Resolución de credenciales | **APP+UNIT (parcial)** | unit: `connection_password_from_env` (solo la rama env); app: `password_prompt_captures_input_and_cancels` (UI del prompt). **gaps**: lookup/escritura en keyring, orden de la cascada, guardar-tras-conectar |
+| 9 | Resolución de credenciales | **APP+UNIT** | unit `sextant-config`: `connection_password_from_env`, `resolve_password_prefers_keyring_over_env` (orden), `resolve_password_falls_back_to_env`, `resolve_password_prompts_when_keyring_key_but_no_secret`, `resolve_password_sqlite_never_prompts`, `resolve_password_tcp_without_keyring_key_connects_passwordless`; app (doble en memoria `InMemoryStore`): `password_prompt_captures_input_and_cancels`, `start_connection_consults_store_then_prompts`, `persist_pending_credential_saves_on_match_and_clears`, `persist_pending_credential_ignores_other_connections`, `failed_connection_discards_pending_credential`. Costuras en ADR-0005. **Sin PTY**; keyring real y connect real → QA manual |
 | 10 | Export | **E2E** | `exports_result_set_to_csv_file`; unit `export.rs`: `csv_has_header_and_empty_null`, `json_is_array_of_objects_with_typed_values`, `sql_emits_insert_per_row_with_typed_literals`, … |
 | 11 | Import | **E2E** | `imports_csv_into_selected_table`; unit `import.rs`: `csv_parses_header_and_rows`, `preview_counts_type_issues`, `build_inserts_uses_only_mapped_columns_and_typed_literals`, … |
 | 12 | Recuperación ante caída (swap) | **APP+UNIT** | app: `recovery_restore_loads_buffers_into_editor`, `recovery_discard_clears_prompt_without_opening_editor`; unit `swap.rs`: `round_trips_through_json`, `parse_rejects_garbage`, `session_path_is_in_swap_dir`. **Sin PTY** |
@@ -35,10 +35,8 @@ names on purpose; this mapping is per-implementation and lives here.
 
 - **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15**.
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
-  **5, 6, 7, 8, 12**.
-- **Huecos reales** (a cerrar):
-  - **#9 Credenciales** — falta cubrir el lookup/guardado en keyring, el **orden**
-    de la cascada (keyring → env → prompt) y el guardar-tras-conectar.
+  **5, 6, 7, 8, 9, 12**.
+- **Huecos reales**: ninguno pendiente.
 
 ## Qué NO pueden cubrir los tests (verificación manual recurrente)
 
@@ -59,6 +57,11 @@ funcional está en `SPEC.md` §17; el *setup* en las skills `db-setup` /
 - **Multi-driver PG / MySQL** — los e2e solo cubren SQLite; el comportamiento
   contra PostgreSQL y MySQL (conexión, introspección de índices/FKs, browse,
   edición + commit) solo se ejercita a mano con los contenedores Docker.
+- **Keyring real y connect real (§17.9)** — los tests usan un `CredentialStore`
+  en memoria y no construyen una conexión real (ver ADR-0005). Queda manual:
+  conectar a PG/MySQL con `keyring_key` sin secreto → prompt enmascarado → tras
+  conectar con éxito, la contraseña queda guardada en el keyring del SO y no se
+  reescribe `connections.toml`.
 
 ## Disciplina
 

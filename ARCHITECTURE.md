@@ -99,14 +99,19 @@ These are the things that bite you if you don't know them.
   (`introspection::introspect_schemas_and_tables`) before the tree is
   populated; on large schemas this latency is user-visible.
 
-- **Password resolution.** On connect, `start_connection` (`ui/src/lib.rs`)
-  tries the OS keyring first via `password_from_keyring(keyring_key)`, then the
-  env-var fallback `connection_password(name)` (`SEXTANT_<NAME>_PASSWORD`, name
-  uppercased with spaces/`-` → `_`). If a connection has a `keyring_key` but no
-  stored secret (and isn't SQLite), the UI shows an interactive password prompt;
-  on a successful connect the entered password is saved to the keyring
-  (`store_password_in_keyring`, service `"sextant"`). All keyring I/O lives in
-  `sextant-config/src/lib.rs`.
+- **Password resolution.** On connect, `start_connection` (`ui/src/lib.rs`) looks
+  up the keyring via the injected `App::credentials: Arc<dyn CredentialStore>`
+  (`core`) and the env-var fallback `connection_password(name)`
+  (`SEXTANT_<NAME>_PASSWORD`, name uppercased with spaces/`-` → `_`), then the
+  pure `resolve_password` (`sextant-config`) decides the cascade: keyring wins
+  over env; with neither, a TCP driver declaring a `keyring_key` prompts,
+  otherwise it connects passwordless. On a successful connect the prompt-entered
+  password is persisted: `confirm_password_prompt` stashes it in
+  `App::pending_credential`, and the `AppMsg::Connected` handler calls
+  `persist_pending_credential`, which writes it via the `CredentialStore` (a
+  failed connect discards it). The production store is `KeyringStore`
+  (`sextant-config`, service `"sextant"`); tests inject an in-memory double. This
+  seam is what makes the cascade + save testable — see ADR-0005.
 
 - **State machine.** `Mode { Normal, Insert }` (editing text), `Focus { Tree,
   Grid }` (Tab toggles), and the boolean `editor_open` (modal overlay). These

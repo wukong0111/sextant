@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use sextant_core::{Connection, SextantError};
+use sextant_core::{Connection, CredentialStore, Driver, SextantError};
 
 mod keymap;
 mod parser;
@@ -66,6 +66,54 @@ pub fn store_password_in_keyring(keyring_key: &str, password: &str) -> Result<()
     entry
         .set_password(password)
         .map_err(|e| SextantError::Config(format!("keyring: {e}")))
+}
+
+/// The production [`CredentialStore`]: reads and writes the OS keyring.
+///
+/// A thin adapter over [`password_from_keyring`] / [`store_password_in_keyring`];
+/// its real I/O is verified manually (it talks to the OS secret store).
+pub struct KeyringStore;
+
+impl CredentialStore for KeyringStore {
+    fn get(&self, key: &str) -> Option<String> {
+        password_from_keyring(key)
+    }
+
+    fn set(&self, key: &str, password: &str) -> Result<(), SextantError> {
+        store_password_in_keyring(key, password)
+    }
+}
+
+/// Outcome of resolving a connection password before connecting (§3.2).
+#[derive(Debug, PartialEq, Eq)]
+pub enum PasswordResolution {
+    /// Connect with this password (`None` for SQLite or a passwordless driver).
+    Connect(Option<String>),
+    /// No secret available: prompt the user, then store it under `keyring_key`.
+    Prompt { keyring_key: String },
+}
+
+/// Decide how to obtain the password for a connection, given the already-looked-up
+/// keyring and environment values. Pure (no I/O) so the cascade *order* is testable.
+///
+/// Cascade (§3.2): keyring wins over env; if neither yields a secret, a TCP driver
+/// that declares a `keyring_key` prompts the user, otherwise connect with no
+/// password (SQLite, or a connection without a `keyring_key`).
+pub fn resolve_password(
+    driver: Driver,
+    keyring_key: Option<&str>,
+    from_keyring: Option<String>,
+    from_env: Option<String>,
+) -> PasswordResolution {
+    if let Some(password) = from_keyring.or(from_env) {
+        return PasswordResolution::Connect(Some(password));
+    }
+    match keyring_key {
+        Some(key) if driver != Driver::Sqlite => PasswordResolution::Prompt {
+            keyring_key: key.to_string(),
+        },
+        _ => PasswordResolution::Connect(None),
+    }
 }
 
 /// Return the XDG-compliant configuration directory for sextant.
@@ -269,6 +317,51 @@ driver = "oracle"
         unsafe { std::env::set_var("SEXTANT_PROD_DB_PASSWORD", "hunter2") };
         assert_eq!(connection_password("prod db"), Some("hunter2".to_string()));
         unsafe { std::env::remove_var("SEXTANT_PROD_DB_PASSWORD") };
+    }
+
+    #[test]
+    fn resolve_password_prefers_keyring_over_env() {
+        // Both present: the keyring value wins (cascade order).
+        let r = resolve_password(
+            Driver::Postgres,
+            Some("k"),
+            Some("from-keyring".into()),
+            Some("from-env".into()),
+        );
+        assert_eq!(r, PasswordResolution::Connect(Some("from-keyring".into())));
+    }
+
+    #[test]
+    fn resolve_password_falls_back_to_env() {
+        // No keyring_key, env set: env is the fallback.
+        let r = resolve_password(Driver::Postgres, None, None, Some("from-env".into()));
+        assert_eq!(r, PasswordResolution::Connect(Some("from-env".into())));
+    }
+
+    #[test]
+    fn resolve_password_prompts_when_keyring_key_but_no_secret() {
+        let r = resolve_password(Driver::Mysql, Some("k"), None, None);
+        assert_eq!(
+            r,
+            PasswordResolution::Prompt {
+                keyring_key: "k".into()
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_password_sqlite_never_prompts() {
+        // SQLite has no credentials even if a (spurious) keyring_key is present.
+        let r = resolve_password(Driver::Sqlite, Some("k"), None, None);
+        assert_eq!(r, PasswordResolution::Connect(None));
+    }
+
+    #[test]
+    fn resolve_password_tcp_without_keyring_key_connects_passwordless() {
+        // A TCP driver without a keyring_key and no env: connect with no password
+        // (no prompt — there is nowhere to store it).
+        let r = resolve_password(Driver::Postgres, None, None, None);
+        assert_eq!(r, PasswordResolution::Connect(None));
     }
 
     #[test]

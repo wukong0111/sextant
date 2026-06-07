@@ -413,6 +413,11 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   conexiones se cargan de `connections.toml`), así que el guardado ocurre al
   conectar correctamente con la password introducida, no al crear/editar una
   conexión.
+- [x] ✅ Costura de testabilidad (cierra el hueco #9 de `docs/coverage.md`): trait
+  `CredentialStore` inyectable (`core`), función pura `resolve_password`
+  (`sextant-config`) para el orden de la cascada, y guardado reubicado a
+  `persist_pending_credential` (seam síncrono). Tests herméticos del orden, el
+  lookup/escritura (doble en memoria) y el guardar-tras-conectar. Ver **ADR-0005**.
 
 ### 3.7 Polish Final ✅ (`ca1faac` help, `6035b9d` fuzzy, `484f8fd` spinner)
 

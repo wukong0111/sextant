@@ -77,3 +77,15 @@ pub trait QueryExecutor: Send + Sync {
         sql: &str,
     ) -> impl std::future::Future<Output = Result<QueryResult, SextantError>> + Send;
 }
+
+/// Abstracts reading and writing connection passwords from a secret store.
+///
+/// This is the injection seam for the credential cascade (§3.2): production
+/// uses the OS keyring, while tests substitute an in-memory double. Kept
+/// object-safe so it can be held as `Arc<dyn CredentialStore>`.
+pub trait CredentialStore: Send + Sync {
+    /// Look up a stored password by its key. `None` if absent or unavailable.
+    fn get(&self, key: &str) -> Option<String>;
+    /// Persist a password under its key.
+    fn set(&self, key: &str, password: &str) -> Result<(), SextantError>;
+}
