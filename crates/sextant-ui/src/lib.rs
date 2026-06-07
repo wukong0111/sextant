@@ -124,6 +124,19 @@ struct Recovery {
     buffers: Vec<swap::SwapBuffer>,
 }
 
+/// An interactive password prompt shown when a connection's secret is not in
+/// the keyring. On submit the password is tried and, on success, stored.
+struct PasswordPrompt {
+    /// Connection name being connected.
+    name: String,
+    /// Index of the connection in the tree.
+    conn_idx: usize,
+    /// Keyring key to store the password under on success.
+    keyring_key: String,
+    /// The password typed so far (rendered masked).
+    input: String,
+}
+
 /// A destructive editor statement awaiting confirmation before it runs.
 struct DangerousStmt {
     /// Connection whose executor will run the statement.
@@ -197,6 +210,8 @@ pub struct App {
     pending_import: Option<PendingImport>,
     /// Destructive editor statement awaiting confirmation, if any.
     pending_dangerous: Option<DangerousStmt>,
+    /// Interactive password prompt, if a connection needs one.
+    password_prompt: Option<PasswordPrompt>,
     /// Orphan-swap recovery prompt shown at startup, if any.
     recovery: Option<Recovery>,
     /// This session's swap file path (`session-<pid>.swp`).
@@ -262,6 +277,7 @@ impl App {
             import_prompt: None,
             pending_import: None,
             pending_dangerous: None,
+            password_prompt: None,
             recovery: None,
             session_swap: swap::session_swap_path(),
             last_swap: Instant::now(),
@@ -340,6 +356,11 @@ impl App {
         // Destructive-statement confirmation modal.
         if let Some(dangerous) = &self.pending_dangerous {
             render_dangerous_modal(frame, area, dangerous, self.palette);
+        }
+
+        // Password prompt.
+        if let Some(prompt) = &self.password_prompt {
+            render_password_prompt(frame, area, prompt, self.palette);
         }
 
         // Crash-recovery prompt (highest priority overlay).
@@ -453,6 +474,26 @@ impl App {
                 KeyCode::Char('r') => self.restore_recovery(),
                 KeyCode::Char('d') => self.discard_recovery(),
                 KeyCode::Esc => self.recovery = None,
+                _ => {}
+            }
+            return;
+        }
+
+        // Password prompt swallows keys until submitted/cancelled.
+        if self.password_prompt.is_some() {
+            match key.code {
+                KeyCode::Enter => self.confirm_password_prompt(tx),
+                KeyCode::Esc => self.password_prompt = None,
+                KeyCode::Backspace => {
+                    if let Some(p) = self.password_prompt.as_mut() {
+                        p.input.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(p) = self.password_prompt.as_mut() {
+                        p.input.push(c);
+                    }
+                }
                 _ => {}
             }
             return;
@@ -796,19 +837,80 @@ impl App {
             return;
         };
 
+        // Resolve the password: keyring (by `keyring_key`) first, then the
+        // env-var fallback. A connection that has a `keyring_key` but no stored
+        // secret (and a driver that authenticates) prompts the user.
+        let from_keyring = config
+            .keyring_key
+            .as_deref()
+            .and_then(sextant_config::password_from_keyring);
+        let password = from_keyring.or_else(|| sextant_config::connection_password(name));
+
+        if password.is_none() && config.driver != sextant_core::Driver::Sqlite {
+            if let Some(keyring_key) = config.keyring_key.clone() {
+                self.password_prompt = Some(PasswordPrompt {
+                    name: name.to_string(),
+                    conn_idx,
+                    keyring_key,
+                    input: String::new(),
+                });
+                return;
+            }
+        }
+
+        self.spawn_connect(name.to_string(), conn_idx, password, None, tx);
+    }
+
+    /// Submit the entered password: connect with it and, on success, store it in
+    /// the keyring under the connection's `keyring_key`.
+    fn confirm_password_prompt(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(prompt) = self.password_prompt.take() else {
+            return;
+        };
+        self.spawn_connect(
+            prompt.name,
+            prompt.conn_idx,
+            Some(prompt.input),
+            Some(prompt.keyring_key),
+            tx,
+        );
+    }
+
+    /// Spawn the async connect + introspection. When `store_key` is `Some` and
+    /// the connection succeeds, the password is saved to the keyring under it.
+    fn spawn_connect(
+        &mut self,
+        name: String,
+        conn_idx: usize,
+        password: Option<String>,
+        store_key: Option<String>,
+        tx: &UnboundedSender<AppMsg>,
+    ) {
+        let Some(config) = self
+            .connection_configs
+            .iter()
+            .find(|c| c.name == name)
+            .cloned()
+        else {
+            return;
+        };
+
         self.tree.set_connecting(conn_idx);
         self.connection_name = Some(format!("{name} (connecting)"));
 
-        let password = sextant_config::connection_password(name);
-        let config = config.clone();
         let tx = tx.clone();
-        let name = name.to_string();
 
         tokio::spawn(async move {
             let mut mgr = sextant_db::ConnectionManager::new();
             match mgr.connect(&name, &config, password.as_deref()).await {
                 Ok(executor) => match executor.introspect_schemas_and_tables(config.driver).await {
                     Ok(schemas) => {
+                        // Persist the working credential for next time.
+                        if let (Some(key), Some(pw)) = (&store_key, &password) {
+                            if let Err(e) = sextant_config::store_password_in_keyring(key, pw) {
+                                tracing::warn!("failed to store password in keyring: {e}");
+                            }
+                        }
                         let mut metadata = std::collections::HashMap::new();
                         for schema in &schemas {
                             match executor
@@ -1941,6 +2043,27 @@ fn render_dangerous_modal(frame: &mut Frame, area: Rect, dangerous: &DangerousSt
     );
 }
 
+/// Render the interactive password prompt (input masked).
+fn render_password_prompt(frame: &mut Frame, area: Rect, prompt: &PasswordPrompt, p: Palette) {
+    let masked: String = "*".repeat(prompt.input.chars().count());
+    render_centered_modal(
+        frame,
+        area,
+        &format!("Password for {}", prompt.name),
+        vec![
+            Line::from(Span::styled(
+                format!("{masked}_"),
+                Style::default().fg(p.foreground),
+            )),
+            Line::from(Span::styled(
+                "<Enter> connect & save to keyring │ <Esc> cancel",
+                Style::default().fg(p.muted),
+            )),
+        ],
+        p,
+    );
+}
+
 /// Render the crash-recovery prompt.
 fn render_recovery_modal(frame: &mut Frame, area: Rect, recovery: &Recovery, p: Palette) {
     let n = recovery.buffers.len();
@@ -2290,6 +2413,34 @@ mod tests {
         )));
         assert!(app.recovery.is_none());
         assert!(!app.editor_open);
+    }
+
+    #[test]
+    fn password_prompt_captures_input_and_cancels() {
+        let mut app = test_app();
+        app.password_prompt = Some(PasswordPrompt {
+            name: "pg".into(),
+            conn_idx: 0,
+            keyring_key: "k".into(),
+            input: String::new(),
+        });
+        for c in ['s', '3'] {
+            app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::NONE,
+            )));
+        }
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.password_prompt.as_ref().unwrap().input, "s");
+
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.password_prompt.is_none());
     }
 
     #[test]

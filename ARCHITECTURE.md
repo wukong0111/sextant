@@ -99,10 +99,14 @@ These are the things that bite you if you don't know them.
   (`introspection::introspect_schemas_and_tables`) before the tree is
   populated; on large schemas this latency is user-visible.
 
-- **Password resolution (v0.1).** `connection_password(name)` reads env var
-  `SEXTANT_<NAME>_PASSWORD`, where `<NAME>` is the connection name uppercased
-  with spaces and `-` replaced by `_` (`sextant-config/src/lib.rs`). Keyring is
-  planned (Fase 3) but **not implemented** — `keyring_key` is parsed but unused.
+- **Password resolution.** On connect, `start_connection` (`ui/src/lib.rs`)
+  tries the OS keyring first via `password_from_keyring(keyring_key)`, then the
+  env-var fallback `connection_password(name)` (`SEXTANT_<NAME>_PASSWORD`, name
+  uppercased with spaces/`-` → `_`). If a connection has a `keyring_key` but no
+  stored secret (and isn't SQLite), the UI shows an interactive password prompt;
+  on a successful connect the entered password is saved to the keyring
+  (`store_password_in_keyring`, service `"sextant"`). All keyring I/O lives in
+  `sextant-config/src/lib.rs`.
 
 - **State machine.** `Mode { Normal, Insert }` (editing text), `Focus { Tree,
   Grid }` (Tab toggles), and the boolean `editor_open` (modal overlay). These

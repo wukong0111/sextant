@@ -37,14 +37,35 @@ pub fn load_connections_from(path: impl AsRef<Path>) -> Result<Vec<Connection>, 
 /// Read the password for a connection from the environment.
 ///
 /// Looks up `SEXTANT_<NAME>_PASSWORD` where `<NAME>` is the connection name
-/// uppercased with spaces and hyphens replaced by underscores.
-///
-/// This is the v0.1 fallback; keyring integration is planned for a later
-/// phase.
+/// uppercased with spaces and hyphens replaced by underscores. This is the
+/// fallback used when a connection has no `keyring_key` (see
+/// [`password_from_keyring`]).
 pub fn connection_password(name: &str) -> Option<String> {
     let key = name.to_uppercase().replace([' ', '-'], "_");
     let key = format!("SEXTANT_{key}_PASSWORD");
     std::env::var(key).ok()
+}
+
+/// The OS keyring service name under which sextant stores credentials.
+const KEYRING_SERVICE: &str = "sextant";
+
+/// Look up a stored password in the OS keyring by its `keyring_key`.
+///
+/// Returns `None` when no entry exists or the keyring is unavailable.
+pub fn password_from_keyring(keyring_key: &str) -> Option<String> {
+    keyring::Entry::new(KEYRING_SERVICE, keyring_key)
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+/// Store a password in the OS keyring under its `keyring_key`.
+pub fn store_password_in_keyring(keyring_key: &str, password: &str) -> Result<(), SextantError> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, keyring_key)
+        .map_err(|e| SextantError::Config(format!("keyring: {e}")))?;
+    entry
+        .set_password(password)
+        .map_err(|e| SextantError::Config(format!("keyring: {e}")))
 }
 
 /// Return the XDG-compliant configuration directory for sextant.
