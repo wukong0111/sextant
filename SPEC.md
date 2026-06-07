@@ -216,6 +216,9 @@ las filas. La SQL de browse se recuerda para poder **refrescar** tras un commit.
 ### 7.2 Navegación (siempre disponible)
 
 *Down/Up/Left/Right* mueven la celda seleccionada; *Top/Bottom* van al extremo.
+La rejilla **se desplaza horizontalmente** para mantener visible la celda
+seleccionada, de modo que se puede recorrer cualquier columna aunque la tabla
+sea más ancha que la pantalla.
 
 ### 7.3 Editabilidad
 
@@ -508,6 +511,12 @@ concreto vive en cada implementación.
 - *Given* una tabla en el árbol
 - *When* se ejecuta Activate sobre ella
 - *Then* el grid muestra el resultado de `SELECT * FROM <tabla> LIMIT 500`
+
+**Navegación horizontal del grid**
+- *Given* un grid con más columnas de las que caben en pantalla
+- *When* se mueve la selección con Right hacia una columna fuera de vista
+- *Then* la rejilla se desplaza horizontalmente y la columna seleccionada queda
+  visible
 
 **Edición del grid con concurrencia optimista**
 - *Given* una tabla **con clave primaria** abierta en el grid

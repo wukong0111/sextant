@@ -32,12 +32,13 @@ names on purpose; this mapping is per-implementation and lives here.
 | 15 | Schema viewer (columnas en árbol) | **E2E** | `schema_viewer_shows_columns_in_tree`; unit: `expand_table_shows_columns` |
 | 16 | Pista de ayuda siempre visible | **APP** | `help_hint_stays_visible_with_grid_focused` (render con grid editable enfocado: la pista de ayuda persiste junto a las pistas contextuales) |
 | 17 | Realimentación de chord pendiente | **E2E+UNIT** | `leader_shows_which_key_menu` (popup tras leader → completa con `e`); unit `keymap.rs`: `leader_continuations_list_actions`, `non_leader_prefix_echoes_pending`, `pending_display_empty_when_idle`, `leader_key_is_recognized` |
+| 18 | Navegación horizontal del grid | **UNIT** | widget `result_grid.rs`: `grid_scrolls_to_keep_cursor_visible` (render con cursor en columna fuera de vista), `first_visible_column_no_scroll_when_all_fit`, `first_visible_column_scrolls_to_show_cursor` (offset mínimo) |
 
 ## Resumen
 
 - **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15, 17**.
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
-  **5, 6, 7, 8, 9, 12, 16**.
+  **5, 6, 7, 8, 9, 12, 16, 18**.
 - **Huecos reales**: ninguno pendiente.
 
 ## Qué NO pueden cubrir los tests (verificación manual recurrente)

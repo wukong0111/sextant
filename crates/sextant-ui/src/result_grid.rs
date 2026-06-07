@@ -431,10 +431,15 @@ impl ResultGrid {
         let widths = compute_column_widths(result);
         let existing = result.rows.len();
 
+        // Horizontal scroll: derive the first visible column each frame so the
+        // selected cell stays on screen on tables wider than the viewport.
+        let offset = first_visible_column(&widths, self.cursor_col, area.width, 1);
+
         let header_cells: Vec<Cell> = result
             .columns
             .iter()
             .enumerate()
+            .skip(offset)
             .map(|(i, col)| {
                 let style = if i == self.cursor_col {
                     Style::default().fg(p.selection_fg).bg(p.selection_bg)
@@ -450,7 +455,7 @@ impl ResultGrid {
             .map(|row_idx| {
                 let is_new = row_idx >= existing;
                 let is_deleted = self.deleted.contains(&row_idx);
-                let cells: Vec<Cell> = (0..result.columns.len())
+                let cells: Vec<Cell> = (offset..result.columns.len())
                     .map(|col_idx| {
                         let editing_here = self
                             .editing
@@ -486,7 +491,7 @@ impl ResultGrid {
             })
             .collect();
 
-        let constraints: Vec<Constraint> = widths
+        let constraints: Vec<Constraint> = widths[offset..]
             .iter()
             .map(|&w| Constraint::Length(w as u16))
             .collect();
@@ -547,6 +552,34 @@ fn compute_column_widths(result: &QueryResult) -> Vec<usize> {
     }
 
     widths.iter().map(|&w| w.clamp(3, 40)).collect()
+}
+
+/// First column to render so that `cursor_col` stays within `area_width`.
+///
+/// Returns the smallest left-anchored `offset` such that columns
+/// `offset..=cursor_col` fit in `area_width` (accounting for `spacing` between
+/// columns, ratatui's default `column_spacing`). Keeps the maximum number of
+/// leading columns while guaranteeing the cursor is visible.
+fn first_visible_column(
+    widths: &[usize],
+    cursor_col: usize,
+    area_width: u16,
+    spacing: u16,
+) -> usize {
+    let cursor_col = cursor_col.min(widths.len().saturating_sub(1));
+    let area = area_width as usize;
+    let spacing = spacing as usize;
+    let mut offset = 0;
+    while offset < cursor_col {
+        // Total width of columns offset..=cursor_col, with spacing between them.
+        let span: usize =
+            widths[offset..=cursor_col].iter().sum::<usize>() + spacing * (cursor_col - offset);
+        if span <= area {
+            break;
+        }
+        offset += 1;
+    }
+    offset
 }
 
 #[cfg(test)]
@@ -638,6 +671,85 @@ mod tests {
         );
         assert!(text.contains("Alice"), "row should contain 'Alice': {text}");
         assert!(text.contains("Bob"), "row should contain 'Bob': {text}");
+    }
+
+    #[test]
+    fn first_visible_column_no_scroll_when_all_fit() {
+        // Three narrow columns easily fit in a wide area.
+        let widths = vec![3, 3, 3];
+        assert_eq!(first_visible_column(&widths, 0, 80, 1), 0);
+        assert_eq!(first_visible_column(&widths, 2, 80, 1), 0);
+    }
+
+    #[test]
+    fn first_visible_column_scrolls_to_show_cursor() {
+        // Five 10-wide columns; a 25-wide area shows ~2 columns at a time.
+        let widths = vec![10, 10, 10, 10, 10];
+        // Cursor on the last column must scroll so that column fits.
+        let offset = first_visible_column(&widths, 4, 25, 1);
+        assert!(
+            offset > 0,
+            "expected horizontal scroll, got offset {offset}"
+        );
+        // Columns offset..=4 must fit in 25.
+        let span: usize = widths[offset..=4].iter().sum::<usize>() + (4 - offset);
+        assert!(span <= 25, "visible span {span} exceeds area");
+        // And it must be the *minimal* offset: one less would overflow.
+        let prev = offset - 1;
+        let span_prev: usize = widths[prev..=4].iter().sum::<usize>() + (4 - prev);
+        assert!(span_prev > 25, "offset not minimal");
+    }
+
+    #[test]
+    fn grid_scrolls_to_keep_cursor_visible() {
+        let result = QueryResult {
+            columns: vec![
+                Column {
+                    name: "alpha".into(),
+                    type_name: "text".into(),
+                },
+                Column {
+                    name: "bravo".into(),
+                    type_name: "text".into(),
+                },
+                Column {
+                    name: "charlie".into(),
+                    type_name: "text".into(),
+                },
+                Column {
+                    name: "omega".into(),
+                    type_name: "text".into(),
+                },
+            ],
+            rows: vec![vec![
+                CellValue::String("a".into()),
+                CellValue::String("b".into()),
+                CellValue::String("c".into()),
+                CellValue::String("z".into()),
+            ]],
+            rows_affected: None,
+        };
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(result));
+        grid.cursor_col = 3; // last column, off-screen at width 20
+
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let text: String = buf.content.iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("omega"),
+            "selected last column should be visible: {text}"
+        );
+        assert!(
+            !text.contains("alpha"),
+            "first column should have scrolled out of view: {text}"
+        );
     }
 
     #[test]
