@@ -212,6 +212,14 @@ When the user says "vamos con la Fase X" or "implementa el punto Y":
 6. **Plan/code sync: correctness wins.** If the implementation diverges from `plan.md` for technical reasons (compiler constraints, warnings, better practices, discovered blockers), update `plan.md` to reflect the actual code. The plan is a living document; correctness of the code always takes precedence over literal fidelity to the plan. Document the reason for the divergence in the plan or the commit message.
 7. **If blocked, stop and report.** Do not improvise solutions to unplanned problems without consulting. Document blockers in the plan or an issue.
 
+### Documentation discipline
+
+A change touches **only the docs its kind implies**: `SPEC.md` for observable
+behavior/contracts (with a matching §17 Given/When/Then), a **new immutable** ADR
+in `docs/adr/` for noteworthy implementation decisions, `ARCHITECTURE.md` for
+structural changes, `plan.md` always (status + commit hash). Spec-first; keep
+`SPEC.md` agnostic. Full rules, litmus and ordering: **`docs/documentation-guide.md`**.
+
 ---
 
 ## Behavioral Guidelines (for LLM Agents)
