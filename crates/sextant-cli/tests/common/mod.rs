@@ -31,6 +31,8 @@ pub const ESC: &[u8] = b"\x1b";
 pub const CTRL_Q: &[u8] = b"\x11"; // quit
 pub const CTRL_E: &[u8] = b"\x05"; // run query in the editor
 pub const CTRL_S: &[u8] = b"\x13"; // save / commit
+pub const CTRL_SPACE: &[u8] = b"\x00"; // autocomplete trigger
+pub const TAB: &[u8] = b"\t"; // accept completion
 pub const SPACE: &[u8] = b" "; // leader key
 
 /// Default timeout for `wait_for` / `wait_exit`.

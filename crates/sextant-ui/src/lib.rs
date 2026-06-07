@@ -3426,6 +3426,21 @@ mod tests {
     }
 
     #[test]
+    fn browse_table_builds_select_with_limit_500() {
+        let mut app = app_with_users_table();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        app.browse_table(0, 0, 0, &tx);
+
+        // §7.1 / §17.4: browse runs `SELECT * FROM <tabla> LIMIT 500`,
+        // with the table reference quoted for the connection's driver.
+        assert_eq!(
+            app.last_browse_sql.as_deref(),
+            Some(r#"SELECT * FROM "main"."users" LIMIT 500"#)
+        );
+    }
+
+    #[test]
     fn d_emits_create_table_ddl_into_editor() {
         let mut app = app_with_users_table();
         // Lines: connection(0), schema(1), table(2).

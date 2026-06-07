@@ -8,7 +8,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{CTRL_E, CTRL_Q, ENTER, Fixture};
+use common::{CTRL_E, CTRL_Q, CTRL_SPACE, ENTER, Fixture, TAB};
 
 #[test]
 fn boots_renders_connection_and_quits_cleanly() {
@@ -178,4 +178,85 @@ fn imports_csv_into_selected_table() {
         .query_row("SELECT name FROM users WHERE id = 3", [], |r| r.get(0))
         .unwrap();
     assert_eq!(name, "carol", "the imported row must be committed");
+}
+
+#[test]
+fn browse_table_renders_rows_with_limit() {
+    let fx = Fixture::sqlite("e2e-browse");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-browse", Duration::from_secs(10));
+
+    tui.send(ENTER);
+    tui.wait_for("users", Duration::from_secs(15));
+
+    tui.type_str("j");
+    tui.type_str("j");
+    tui.send(ENTER);
+    tui.wait_for("alice", Duration::from_secs(10));
+    tui.wait_for("bob", Duration::from_secs(10));
+    tui.wait_for("2 rows", Duration::from_secs(10));
+
+    tui.send(CTRL_Q);
+    assert!(
+        tui.wait_exit(Duration::from_secs(10)),
+        "sextant should exit"
+    );
+}
+
+#[test]
+fn autocomplete_inserts_table_name() {
+    let fx = Fixture::sqlite("e2e-ac");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-ac", Duration::from_secs(10));
+
+    tui.send(ENTER);
+    tui.wait_for("users", Duration::from_secs(15));
+
+    tui.leader("e");
+    tui.wait_for("insert", Duration::from_secs(10));
+    tui.type_str("i");
+    tui.type_str("SELECT * FROM ");
+    tui.wait_for("SELECT * FROM ", Duration::from_secs(10));
+
+    tui.send(CTRL_SPACE);
+    tui.wait_for("users", Duration::from_secs(5));
+    tui.send(TAB);
+    tui.wait_for("SELECT * FROM users", Duration::from_secs(5));
+
+    tui.esc();
+    tui.wait_for("<C-e> run", Duration::from_secs(10));
+    tui.send(CTRL_E);
+    tui.wait_for("2 rows", Duration::from_secs(10));
+
+    tui.esc();
+    tui.send(CTRL_Q);
+    tui.wait_for("Unsaved buffers", Duration::from_secs(10));
+    tui.type_str("d");
+    assert!(
+        tui.wait_exit(Duration::from_secs(10)),
+        "sextant should exit"
+    );
+}
+
+#[test]
+fn schema_viewer_shows_columns_in_tree() {
+    let fx = Fixture::sqlite("e2e-schema");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-schema", Duration::from_secs(10));
+
+    tui.send(ENTER);
+    tui.wait_for("users", Duration::from_secs(15));
+
+    tui.type_str("j");
+    tui.type_str("j");
+    tui.type_str("l");
+    tui.wait_for("INTEGER", Duration::from_secs(10));
+    tui.wait_for("id", Duration::from_secs(10));
+    tui.wait_for("TEXT", Duration::from_secs(10));
+
+    tui.send(CTRL_Q);
+    assert!(
+        tui.wait_exit(Duration::from_secs(10)),
+        "sextant should exit"
+    );
 }

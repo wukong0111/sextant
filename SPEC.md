@@ -550,6 +550,20 @@ concreto vive en cada implementación.
 - *When* se pulsa ese chord
 - *Then* se ejecuta la acción del usuario, no la de por defecto
 
+**Autocomplete de tablas y columnas**
+- *Given* el editor abierto en modo Insert con una conexión activa
+- *When* se escribe el inicio de una consulta y se ejecuta la acción de
+  autocompletado (`Ctrl+Space`)
+- *Then* aparece un popup con candidatos del esquema de la conexión: nombres de
+  tablas y, tras un calificador `tabla.`, las columnas de esa tabla
+- *And* al aceptar un candidato, este se inserta sustituyendo el prefijo escrito
+
+**Schema viewer (columnas en el árbol)**
+- *Given* una conexión introspeccionada con sus tablas en el árbol
+- *When* se expande una tabla
+- *Then* se listan sus columnas con su tipo declarado y una marca visible de
+  clave primaria
+
 ---
 
 ## 18. Rationale de las decisiones de producto

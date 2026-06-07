@@ -18,7 +18,7 @@ names on purpose; this mapping is per-implementation and lives here.
 | 1 | Arranque y salida limpia | **E2E** | `boots_renders_connection_and_quits_cleanly`; app: `app_default_state`, `ctrl_q_sets_should_quit`, `ctrl_q_with_dirty_buffer_prompts` |
 | 2 | Conectar y consultar | **E2E** | `editor_query_is_recorded_in_history`; app: `editor_toggle_with_space_e`, `grid_renders_when_result_present`, `status_line_shows_row_count_and_duration` |
 | 3 | El historial registra toda ejecución | **E2E** | `editor_query_is_recorded_in_history`; unit: `query_history_records_and_lists_newest_first` (incl. fila con error), `recent_queries_respects_limit` |
-| 4 | Browse de tabla (`SELECT * … LIMIT 500`) | **—** | **gap**: ningún test afirma el contrato `LIMIT 500` ni el flujo browse-desde-árbol |
+| 4 | Browse de tabla (`SELECT * … LIMIT 500`) | **E2E+APP** | `browse_table_renders_rows_with_limit` (flujo árbol→grid); app: `browse_table_builds_select_with_limit_500` (contrato SQL: `LIMIT 500` + quoting) |
 | 5 | Edición del grid + concurrencia optimista | **APP+UNIT** | widget: `editing_a_cell_generates_update`, `adding_a_row_generates_insert`, `marking_a_row_generates_delete`, `editing_pk_uses_original_value_in_where`, `discard_clears_all_pending`; app: `ctrl_s_opens_commit_modal_and_esc_cancels`; unit `sql.rs`: `update_statement_by_pk`, `where_match_uses_is_null_for_null_values`, `update_with_null_original_in_where`. **Sin PTY** para el commit completo |
 | 6 | Grid de solo lectura | **UNIT** | `read_only_without_context_or_pk` |
 | 7 | Transacción de sesión psql-style | **UNIT** | `session_transaction_commits`, `session_transaction_rolls_back` (ve cambios no confirmados), `classifies_txn_control`. **Sin PTY** |
@@ -28,15 +28,15 @@ names on purpose; this mapping is per-implementation and lives here.
 | 11 | Import | **E2E** | `imports_csv_into_selected_table`; unit `import.rs`: `csv_parses_header_and_rows`, `preview_counts_type_issues`, `build_inserts_uses_only_mapped_columns_and_typed_literals`, … |
 | 12 | Recuperación ante caída (swap) | **APP+UNIT** | app: `recovery_restore_loads_buffers_into_editor`, `recovery_discard_clears_prompt_without_opening_editor`; unit `swap.rs`: `round_trips_through_json`, `parse_rejects_garbage`, `session_path_is_in_swap_dir`. **Sin PTY** |
 | 13 | Remapeo de teclas | **UNIT** | `user_binding_overrides_default_chord`, `user_can_add_alternate_chord`, `unknown_action_name_is_skipped` |
+| 14 | Autocomplete de tablas y columnas | **E2E** | `autocomplete_inserts_table_name`; unit: `after_from_filters_by_prefix`, `dotted_table_offers_columns`, `ctrl_space_triggers_table_completion`, `enter_accepts_completion_and_replaces_prefix` |
+| 15 | Schema viewer (columnas en árbol) | **E2E** | `schema_viewer_shows_columns_in_tree`; unit: `expand_table_shows_columns` |
 
 ## Resumen
 
-- **PTY end-to-end**: escenarios **1, 2, 3, 10, 11**.
+- **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15**.
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
   **5, 6, 7, 8, 12**.
 - **Huecos reales** (a cerrar):
-  - **#4 Browse** — añadir un e2e que haga *Activate* sobre una tabla y afirme el
-    resultado de `SELECT * FROM <t> LIMIT 500`; barato.
   - **#9 Credenciales** — falta cubrir el lookup/guardado en keyring, el **orden**
     de la cascada (keyring → env → prompt) y el guardar-tras-conectar.
 
