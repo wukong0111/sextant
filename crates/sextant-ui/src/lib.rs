@@ -517,7 +517,7 @@ impl App {
         } else if self.focus == Focus::Grid && self.result_grid.is_editable() {
             " <Enter> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
         } else {
-            " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <Space>i import │ <Space>? help "
+            " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <Space>i import "
         };
         let hint_span = Span::styled(hint, Style::default().fg(p.muted));
 
@@ -531,8 +531,23 @@ impl App {
             edit_span,
             hint_span,
         ]);
+
+        // Help is the entry point to every other binding, so it gets its own
+        // cell pinned to the right edge. On a narrow terminal the contextual
+        // hint (left cell) truncates; the help hint never does.
+        const HELP_HINT: &str = " <Space>? help ";
+        let bar = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(HELP_HINT.len() as u16),
+            ])
+            .split(outer[1]);
         let status_bar = Paragraph::new(status).style(Style::default().bg(p.background));
-        frame.render_widget(status_bar, outer[1]);
+        frame.render_widget(status_bar, bar[0]);
+        let help_bar = Paragraph::new(Span::styled(HELP_HINT, Style::default().fg(p.muted)))
+            .style(Style::default().bg(p.background));
+        frame.render_widget(help_bar, bar[1]);
     }
 
     fn handle_key_event(&mut self, key: KeyEvent, tx: &UnboundedSender<AppMsg>) {
@@ -3374,6 +3389,47 @@ mod tests {
         assert!(
             text.contains("1 rows / 38ms"),
             "status line should show rows and duration: {text}"
+        );
+    }
+
+    #[test]
+    fn help_hint_stays_visible_with_grid_focused() {
+        // Wide enough that the long edit-mode hint does not truncate the line.
+        let backend = TestBackend::new(120, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        // Editable grid with the focus on it: the status line shows the
+        // contextual edit hints, which used to replace the help hint entirely.
+        app.focus = Focus::Grid;
+        app.result_grid.set_result(Some(sextant_core::QueryResult {
+            columns: vec![sextant_core::Column {
+                name: "id".into(),
+                type_name: "int".into(),
+            }],
+            rows: vec![vec![sextant_core::CellValue::I64(1)]],
+            rows_affected: None,
+        }));
+        app.result_grid
+            .set_edit_context(Some(result_grid::EditContext {
+                driver: sextant_core::Driver::Sqlite,
+                schema: "main".into(),
+                table: "users".into(),
+                pk_columns: vec!["id".into()],
+            }));
+        assert!(app.result_grid.is_editable());
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let last_row = buf.content.chunks(buf.area.width as usize).last().unwrap();
+        let text: String = last_row.iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("edit"),
+            "status line should show the grid edit hints: {text}"
+        );
+        assert!(
+            text.contains("<Space>? help"),
+            "help hint must stay visible even when the grid is focused: {text}"
         );
     }
 

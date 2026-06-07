@@ -52,7 +52,9 @@ fn editor_query_is_recorded_in_history() {
     tui.send(CTRL_E); // execute
     tui.wait_for("rows", Duration::from_secs(10)); // result returned
     tui.esc(); // close the editor modal
-    tui.wait_for("history", Duration::from_secs(10)); // main status hint
+    // Leftmost main-view hint: survives narrow-terminal truncation, unlike the
+    // later leader hints (history/recent/export), which the help cell can clip.
+    tui.wait_for("<Space>e editor", Duration::from_secs(10));
 
     // The history picker (<Space>h) lists the query we just ran.
     tui.leader("h");
@@ -103,7 +105,9 @@ fn exports_result_set_to_csv_file() {
     tui.send(CTRL_E);
     tui.wait_for("rows", Duration::from_secs(10));
     tui.esc(); // close the editor modal
-    tui.wait_for("export", Duration::from_secs(10)); // main status hint
+    // Leftmost main-view hint: survives narrow-terminal truncation (the later
+    // `<Space>x export` hint can be clipped by the pinned help cell).
+    tui.wait_for("<Space>e editor", Duration::from_secs(10));
 
     // Open the export menu (<Space>x), pick the first format (CSV) with Enter.
     tui.leader("x");
