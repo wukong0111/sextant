@@ -174,7 +174,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - **Given** un resultado cargado en el grid
 - **When** se navega con `hjkl`
 - **Then** la celda seleccionada se mueve en consecuencia
-- _Cobertura: `manual:MANUAL-QA.md` (follow-up: automatizar en e2e)_
+- _Cobertura: `manual:docs/coverage.md` (follow-up: automatizar en e2e)_
 
 ---
 
@@ -241,7 +241,7 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - **Given** conexiones definidas para PostgreSQL, MySQL y SQLite
 - **When** se selecciona cualquiera de ellas y se pulsa `Enter`
 - **Then** la conexión se establece y la introspección lista sus tablas
-- _Cobertura: `e2e:*` (SQLite, vía los tests de boot/historial) · `manual:MANUAL-QA.md §4` (PG/MySQL, requieren Docker)_
+- _Cobertura: `e2e:*` (SQLite, vía los tests de boot/historial) · `manual:docs/coverage.md` (PG/MySQL, requieren Docker)_
 
 **Escenario: edición del grid (CRUD) con commit en lote**
 - **Given** una tabla con PK abierta en el grid (editable)
@@ -249,20 +249,20 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
   para borrar (`dd`) y se confirma con `Ctrl+S`
 - **Then** un modal muestra los statements y, al aceptar, los cambios se aplican
   en una sola transacción y el grid se refresca
-- _Cobertura: `manual:MANUAL-QA.md §2.2` (follow-up: automatizar en e2e)_
+- _Cobertura: `manual:docs/coverage.md` (follow-up: automatizar en e2e)_
 
 **Escenario: autocomplete de tablas y columnas**
 - **Given** el editor abierto con una conexión activa
 - **When** se escribe un prefijo de nombre de tabla o columna
 - **Then** aparece la lista de candidatos del esquema y se puede insertar uno
-- _Cobertura: `manual:MANUAL-QA.md §2.3` (follow-up: automatizar en e2e)_
+- _Cobertura: `manual:docs/coverage.md` (follow-up: automatizar en e2e)_
 
 **Escenario: schema viewer, browse y DDL**
 - **Given** una conexión activa en el sidebar
 - **When** se expande una tabla (`l`)
 - **Then** se ven sus columnas con marcas de PK, se puede hacer browse
   (`SELECT * ... LIMIT 500`) y generar su DDL
-- _Cobertura: `manual:MANUAL-QA.md §2.4` (follow-up: automatizar en e2e)_
+- _Cobertura: `manual:docs/coverage.md` (follow-up: automatizar en e2e)_
 
 ---
 

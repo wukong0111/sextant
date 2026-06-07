@@ -40,8 +40,29 @@ names on purpose; this mapping is per-implementation and lives here.
   - **#9 Credenciales** — falta cubrir el lookup/guardado en keyring, el **orden**
     de la cascada (keyring → env → prompt) y el guardar-tras-conectar.
 
+## Qué NO pueden cubrir los tests (verificación manual recurrente)
+
+No es una lista de tareas: es el **catálogo de aspectos que solo un humano puede
+verificar**, a revisar **cada vez** que se toca el área relacionada (marcar algo
+como "hecho" no garantiza que siga funcionando tras un cambio futuro). El *qué*
+funcional está en `SPEC.md` §17; el *setup* en las skills `db-setup` /
+`connect-tui`. Aquí solo lo no automatizable:
+
+- **Color y resaltado reales** — `TestBackend` valida el *estilo* asignado, no su
+  render en una TTY: celda modificada resaltada, fila nueva en verde, fila
+  borrada tachada en rojo (§17.5); `txn: ACTIVE` en ámbar (§17.7); indicador 🔒
+  de solo lectura (§17.6); spinner de trabajo asíncrono; tema aplicado de forma
+  coherente (bordes, tabs, popup de autocomplete).
+- **Feel en TTY real** — timing de pulsaciones, secuencias de escape (un `Esc`
+  solo vs. inicio de secuencia), ausencia de glitches de render, layout y status
+  line correctos en ~80 columnas.
+- **Multi-driver PG / MySQL** — los e2e solo cubren SQLite; el comportamiento
+  contra PostgreSQL y MySQL (conexión, introspección de índices/FKs, browse,
+  edición + commit) solo se ejercita a mano con los contenedores Docker.
+
 ## Disciplina
 
 Toda feature nueva o cambio de comportamiento añade su criterio en `SPEC.md` §17
 y su(s) test(s) aquí (ver `docs/documentation-guide.md`). Un escenario sin fila
-en esta tabla, o con tier **—**, es deuda de test explícita.
+en esta tabla, o con tier **—**, es deuda de test explícita. Lo no automatizable
+(color, feel en TTY, multi-driver) pertenece a la sección anterior.

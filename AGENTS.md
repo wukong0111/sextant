@@ -20,7 +20,7 @@ Agent-facing reference for the `sextant` project. Read this first before making 
 | `SPEC.md` | Implementation-agnostic product specification: behavior, observable contracts, Given/When/Then acceptance criteria, and product rationale. The canonical "what". |
 | `docs/adr/` | Implementation decision records (the "how/why-of-how"; e.g. sqlx, lock-free txn flag). Each links its product requirement in `SPEC.md`. |
 | `plan.md` | Development roadmap split into phases (Fase 0–3). Check this before starting work. |
-| `MANUAL-QA.md` | Hands-on QA runbook: how to exercise each feature inside the TUI (setup, walkthrough, keybindings). Use to validate UI work that automated tests can't cover. |
+| `docs/coverage.md` | Binding from `SPEC.md` §17 acceptance criteria to concrete tests, plus the catalog of checks that only manual/visual verification can cover (color, real-TTY feel, PG/MySQL). |
 
 > **Note:** `CLAUDE.md` is a symlink to this file (`AGENTS.md`) — editing either edits both.
 > Project-specific workflows are available as slash-command skills in `.claude/skills/`
