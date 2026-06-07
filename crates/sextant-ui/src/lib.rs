@@ -79,6 +79,10 @@ pub enum AppMsg {
     HistoryLoaded(Vec<sextant_state::HistoryEntry>),
     /// Recent files loaded from the state store (for the recent-files picker).
     RecentFilesLoaded(Vec<sextant_state::FileEntry>),
+    /// Snippets loaded from the state store (for the snippet picker).
+    SnippetsLoaded(Vec<sextant_state::Snippet>),
+    /// A snippet was saved (the snippet name), or an error.
+    SnippetSaved(Result<String, String>),
     /// An export finished: the written path, or an error message.
     ExportFinished(Result<std::path::PathBuf, String>),
     /// An import finished: rows affected, or an error message.
@@ -217,6 +221,8 @@ pub struct App {
     show_help: bool,
     /// Active fuzzy picker (command palette / find table / open file), if any.
     fuzzy: Option<FuzzyPicker>,
+    /// Snippet-name prompt (saving the current buffer as a snippet), if active.
+    snippet_prompt: Option<String>,
     /// Interactive password prompt, if a connection needs one.
     password_prompt: Option<PasswordPrompt>,
     /// Orphan-swap recovery prompt shown at startup, if any.
@@ -291,6 +297,7 @@ impl App {
             pending_dangerous: None,
             show_help: false,
             fuzzy: None,
+            snippet_prompt: None,
             password_prompt: None,
             recovery: None,
             session_swap: swap::session_swap_path(),
@@ -347,6 +354,11 @@ impl App {
         // Save-as filename prompt.
         if let Some(name) = &self.save_prompt {
             render_save_prompt(frame, area, name, self.palette);
+        }
+
+        // Snippet-name prompt.
+        if let Some(name) = &self.snippet_prompt {
+            render_snippet_prompt(frame, area, name, self.palette);
         }
 
         // Quit-with-unsaved-buffers prompt.
@@ -598,6 +610,26 @@ impl App {
             return;
         }
 
+        // Snippet-name prompt swallows keys until confirmed/cancelled.
+        if self.snippet_prompt.is_some() {
+            match key.code {
+                KeyCode::Enter => self.confirm_save_snippet(tx),
+                KeyCode::Esc => self.snippet_prompt = None,
+                KeyCode::Backspace => {
+                    if let Some(name) = self.snippet_prompt.as_mut() {
+                        name.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(name) = self.snippet_prompt.as_mut() {
+                        name.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // Quit-with-unsaved-buffers prompt.
         if self.quit_prompt {
             match key.code {
@@ -791,6 +823,8 @@ impl App {
             Action::CommandPalette => self.open_command_palette(),
             Action::FindTable => self.open_table_finder(),
             Action::OpenFile => self.open_file_finder(),
+            Action::Snippets => self.open_snippets(tx),
+            Action::SaveSnippet => self.begin_save_snippet(),
         }
     }
 
@@ -1177,6 +1211,30 @@ impl App {
                     selected: 0,
                 });
             }
+            AppMsg::SnippetsLoaded(snippets) => {
+                if snippets.is_empty() {
+                    self.last_notice = Some("no snippets saved yet (<Space>S to save)".into());
+                } else {
+                    let items = snippets
+                        .into_iter()
+                        .map(|s| {
+                            let preview = s.body.lines().next().unwrap_or("").trim();
+                            FuzzyItem {
+                                label: format!("{}  —  {}", s.name, truncate(preview, 50)),
+                                action: FuzzyAction::InsertSnippet(s.body),
+                            }
+                        })
+                        .collect();
+                    self.fuzzy = Some(FuzzyPicker::new("Insert snippet", items));
+                }
+            }
+            AppMsg::SnippetSaved(Ok(name)) => {
+                self.last_error = None;
+                self.last_notice = Some(format!("saved snippet '{name}'"));
+            }
+            AppMsg::SnippetSaved(Err(error)) => {
+                self.last_error = Some(format!("snippet save failed: {error}"));
+            }
             AppMsg::ExportFinished(Ok(path)) => {
                 tracing::info!("exported to {}", path.display());
                 self.last_error = None;
@@ -1383,7 +1441,59 @@ impl App {
                 Ok(content) => self.load_into_editor(&content, Some(path)),
                 Err(e) => self.last_error = Some(format!("open failed: {e}")),
             },
+            FuzzyAction::InsertSnippet(body) => {
+                if !self.editor_open {
+                    self.open_editor();
+                }
+                self.editor.insert_str(&body);
+            }
         }
+    }
+
+    /// Load snippets from the state store into a fuzzy picker (async).
+    fn open_snippets(&self, tx: &UnboundedSender<AppMsg>) {
+        let Some(store) = self.state_store.clone() else {
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Ok(snippets) = store.snippets().await {
+                let _ = tx.send(AppMsg::SnippetsLoaded(snippets));
+            }
+        });
+    }
+
+    /// Begin saving the current editor buffer as a named snippet (name prompt).
+    fn begin_save_snippet(&mut self) {
+        if self.editor.content().trim().is_empty() {
+            self.last_error = Some("nothing to save as a snippet".into());
+            return;
+        }
+        self.snippet_prompt = Some(String::new());
+    }
+
+    /// Persist the current buffer under the prompted snippet name (async).
+    fn confirm_save_snippet(&mut self, tx: &UnboundedSender<AppMsg>) {
+        let Some(name) = self.snippet_prompt.take() else {
+            return;
+        };
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let body = self.editor.content();
+        let Some(store) = self.state_store.clone() else {
+            self.last_error = Some("snippets unavailable (no state store)".into());
+            return;
+        };
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let msg = match store.save_snippet(&name, &body).await {
+                Ok(()) => AppMsg::SnippetSaved(Ok(name)),
+                Err(e) => AppMsg::SnippetSaved(Err(e.to_string())),
+            };
+            let _ = tx.send(msg);
+        });
     }
 
     fn run_editor_sql(&mut self, tx: &UnboundedSender<AppMsg>) {
@@ -2408,6 +2518,26 @@ fn render_recovery_modal(frame: &mut Frame, area: Rect, recovery: &Recovery, p: 
     );
 }
 
+/// Render the snippet-name prompt.
+fn render_snippet_prompt(frame: &mut Frame, area: Rect, name: &str, p: Palette) {
+    render_centered_modal(
+        frame,
+        area,
+        "Save snippet as",
+        vec![
+            Line::from(Span::styled(
+                format!("{name}_"),
+                Style::default().fg(p.foreground),
+            )),
+            Line::from(Span::styled(
+                "name the snippet │ <Enter> save │ <Esc> cancel",
+                Style::default().fg(p.muted),
+            )),
+        ],
+        p,
+    );
+}
+
 /// Render the Save-as filename prompt.
 fn render_save_prompt(frame: &mut Frame, area: Rect, name: &str, p: Palette) {
     render_centered_modal(
@@ -2742,6 +2872,40 @@ mod tests {
             KeyCode::Char(c),
             KeyModifiers::NONE,
         )));
+    }
+
+    #[test]
+    fn save_snippet_requires_content_and_prompts() {
+        let mut app = test_app();
+        app.begin_save_snippet();
+        assert!(
+            app.snippet_prompt.is_none(),
+            "an empty editor should not prompt for a snippet name"
+        );
+
+        app.editor.set_content("SELECT 1");
+        app.begin_save_snippet();
+        assert!(
+            app.snippet_prompt.is_some(),
+            "a non-empty editor should prompt for a snippet name"
+        );
+    }
+
+    #[test]
+    fn snippets_loaded_opens_fuzzy_picker() {
+        let mut app = test_app();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        app.handle_msg(
+            AppMsg::SnippetsLoaded(vec![sextant_state::Snippet {
+                name: "recent".into(),
+                body: "SELECT * FROM t".into(),
+            }]),
+            &tx,
+        );
+        assert!(
+            app.fuzzy.is_some(),
+            "loading snippets should open the picker"
+        );
     }
 
     #[test]

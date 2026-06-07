@@ -42,6 +42,8 @@ pub enum Action {
     CommandPalette,
     FindTable,
     OpenFile,
+    Snippets,
+    SaveSnippet,
 }
 
 impl Action {
@@ -71,6 +73,8 @@ impl Action {
             "command_palette" => Action::CommandPalette,
             "find_table" => Action::FindTable,
             "open_file" => Action::OpenFile,
+            "snippets" => Action::Snippets,
+            "save_snippet" => Action::SaveSnippet,
             _ => return None,
         })
     }
@@ -101,6 +105,8 @@ impl Action {
             Action::CommandPalette => "command palette",
             Action::FindTable => "find table",
             Action::OpenFile => "open .sql file",
+            Action::Snippets => "insert snippet",
+            Action::SaveSnippet => "save buffer as snippet",
         }
     }
 }
@@ -255,6 +261,8 @@ impl Keymap {
             ("<Space>:", Action::CommandPalette),
             ("<Space>f", Action::FindTable),
             ("<Space>o", Action::OpenFile),
+            ("<Space>s", Action::Snippets),
+            ("<Space>S", Action::SaveSnippet),
         ];
         let mut map = Self {
             bindings: Vec::new(),

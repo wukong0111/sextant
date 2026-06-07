@@ -467,6 +467,13 @@ impl EditorModal {
         self.active().textarea.lines().join("\n")
     }
 
+    /// Insert text at the active buffer's cursor (used for snippet insertion).
+    pub fn insert_str(&mut self, text: &str) {
+        let buf = self.active_mut();
+        buf.textarea.insert_str(text);
+        buf.dirty = true;
+    }
+
     /// Replace the active buffer's content.
     pub fn set_content(&mut self, text: &str) {
         let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();

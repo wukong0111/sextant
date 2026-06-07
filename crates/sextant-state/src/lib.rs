@@ -29,6 +29,13 @@ pub struct FileEntry {
     pub last_opened: String,
 }
 
+/// A reusable, named SQL snippet. Snippets are global (not per-connection).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snippet {
+    pub name: String,
+    pub body: String,
+}
+
 /// Per-connection cap for the recent-files ring buffer.
 const RECENT_FILES_RING: i64 = 20;
 
@@ -90,7 +97,47 @@ impl StateStore {
         .await
         .map_err(db_err)?;
 
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS snippets (
+                name TEXT PRIMARY KEY,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+
         Ok(())
+    }
+
+    /// Save a named snippet, overwriting any existing snippet with the same name.
+    pub async fn save_snippet(&self, name: &str, body: &str) -> Result<(), SextantError> {
+        sqlx::query(
+            "INSERT INTO snippets (name, body, created_at)
+             VALUES (?1, ?2, datetime('now'))
+             ON CONFLICT(name) DO UPDATE SET body = excluded.body, created_at = datetime('now')",
+        )
+        .bind(name)
+        .bind(body)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// All snippets, ordered by name.
+    pub async fn snippets(&self) -> Result<Vec<Snippet>, SextantError> {
+        let rows =
+            sqlx::query_as::<_, (String, String)>("SELECT name, body FROM snippets ORDER BY name")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(db_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, body)| Snippet { name, body })
+            .collect())
     }
 
     /// Append a query to the history.
@@ -276,6 +323,32 @@ mod tests {
             1,
             "re-recording must not duplicate the path"
         );
+    }
+
+    #[tokio::test]
+    async fn snippets_save_list_and_overwrite() {
+        let (store, _dir) = temp_store().await;
+        store
+            .save_snippet("count", "SELECT count(*) FROM ?")
+            .await
+            .unwrap();
+        store
+            .save_snippet("recent", "SELECT * FROM t ORDER BY id DESC LIMIT 10")
+            .await
+            .unwrap();
+
+        let list = store.snippets().await.unwrap();
+        assert_eq!(list.len(), 2);
+        // Ordered by name.
+        assert_eq!(list[0].name, "count");
+        assert_eq!(list[1].name, "recent");
+
+        // Re-saving the same name overwrites the body, not appends.
+        store.save_snippet("count", "SELECT 1").await.unwrap();
+        let list = store.snippets().await.unwrap();
+        assert_eq!(list.len(), 2);
+        let count = list.iter().find(|s| s.name == "count").unwrap();
+        assert_eq!(count.body, "SELECT 1");
     }
 
     #[tokio::test]

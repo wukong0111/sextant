@@ -25,6 +25,8 @@ pub enum FuzzyAction {
     },
     /// Load a `.sql` file into the editor (file opener).
     Load(std::path::PathBuf),
+    /// Insert a snippet's body at the editor cursor (snippet picker).
+    InsertSnippet(String),
 }
 
 /// A single selectable entry.
