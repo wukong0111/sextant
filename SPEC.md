@@ -3,7 +3,7 @@
 > **Propósito.** Este documento describe *qué es* sextant y *cómo se comporta*,
 > de forma **independiente de lenguaje, librerías y arquitectura**. Una
 > implementación en cualquier stack que satisfaga esta especificación —y, en
-> particular, los **criterios de aceptación** de la §13— es una réplica fiel de
+> particular, los **criterios de aceptación** de la §17— es una réplica fiel de
 > sextant.
 >
 > **Reglas de este documento.** No nombra lenguajes, frameworks, crates ni

@@ -52,8 +52,8 @@ All code lives in `crates/` (the workspace tree is in `AGENTS.md`).
   All DB I/O is async (`tokio`).
 - **`sextant-state`** — Owns the app's private `state.db` (query history,
   recent-files ring). Async (`sqlx`/SQLite), independent of user connections.
-- **`sextant-ui`** — TUI event loop, state machine (`Normal`/`Insert`/
-  `EditorOpen`), and all `ratatui` widgets.
+- **`sextant-ui`** — TUI event loop, state machine (`Normal`/`Insert` modes +
+  `editor_open` overlay; see Invariants), and all `ratatui` widgets.
 
 Dependency edges: `cli → ui → core`; `db`, `config`, `state` each `→ core`.
 The service crates (`db`, `config`, `state`) must compile and be testable
@@ -67,14 +67,21 @@ The service crates (`db`, `config`, `state`) must compile and be testable
 |---------|------|
 | Event loop, `App` state, render, key handling, message handling | `crates/sextant-ui/src/lib.rs` |
 | Sidebar tree (connections → schemas → tables), connection state | `crates/sextant-ui/src/tree_pane.rs` |
-| Result grid (read-only, `hjkl`/`gg`/`G` nav) | `crates/sextant-ui/src/result_grid.rs` |
-| SQL editor modal (`tui-textarea`, Normal/Insert) | `crates/sextant-ui/src/editor_modal.rs` |
-| SQL execution + row→`CellValue` mapping per backend | `crates/sextant-db/src/executor.rs` |
+| Result grid (`hjkl`/`gg`/`G` nav + inline editing, optimistic commit) | `crates/sextant-ui/src/result_grid.rs` |
+| SQL editor modal (`tui-textarea`, Normal/Insert, multi-buffer tabs) | `crates/sextant-ui/src/editor_modal.rs` |
+| Editor autocomplete (table/column candidates from the schema cache) | `crates/sextant-ui/src/autocomplete.rs` |
+| Fuzzy pickers (command palette, find table, open file, snippets) | `crates/sextant-ui/src/fuzzy.rs` |
+| Keymap: default bindings, user remap, chord resolver | `crates/sextant-ui/src/keymap.rs` |
+| Theme → `ratatui` palette resolution | `crates/sextant-ui/src/palette.rs` |
+| Swap files (crash recovery) | `crates/sextant-ui/src/swap.rs` |
+| SQL execution, transaction state + row→`CellValue` mapping per backend | `crates/sextant-db/src/executor.rs` |
+| SQL generation: quoting, `CREATE TABLE` skeleton, DML by PK, destructive-op detection | `crates/sextant-db/src/sql.rs` |
+| Export serialization (CSV/JSON/SQL) · import parsing + column mapping | `crates/sextant-db/src/{export,import}.rs` |
 | Connection pools per active connection | `crates/sextant-db/src/connection_manager.rs` |
 | Schema/table introspection | `crates/sextant-db/src/introspection.rs` |
 | Connection-URL construction per driver | `crates/sextant-db/src/url_builder.rs` |
-| Config load / validation / XDG paths / password lookup | `crates/sextant-config/src/{lib,parser,validation,paths}.rs` |
-| Local `state.db` (query history, recent-files ring) | `crates/sextant-state/src/lib.rs` |
+| Config load / validation / XDG paths / password lookup / themes / keymaps | `crates/sextant-config/src/{lib,parser,validation,paths}.rs` |
+| Local `state.db` (query history, recent-files ring, snippets) | `crates/sextant-state/src/lib.rs` |
 | Domain types & `QueryExecutor` trait | `crates/sextant-core/src/lib.rs` |
 
 Public DB surface is re-exported from `sextant-db/src/lib.rs`:
@@ -100,8 +107,16 @@ These are the things that bite you if you don't know them.
 
 - **`execute()` distinguishes SELECT from DML/DDL.** `is_select_query()` routes
   SELECTs to a full `QueryResult { columns, rows }`; everything else returns
-  `rows_affected`. There is **no transaction state** — every `execute()` is
-  independent. (Relevant for Fase 2 grid editing.)
+  `rows_affected`.
+
+- **Transactions are session-held, not per-statement.** By default each
+  `execute()` is autocommit and independent. On `BEGIN`/`START TRANSACTION`,
+  `SqlxExecutor` pulls a `PoolConnection` from the pool and **retains** it
+  (`HeldConn`); subsequent statements run on that held connection — seeing
+  uncommitted changes — until `COMMIT`/`ROLLBACK` returns it to the pool. The
+  `active: AtomicBool` flag (`in_transaction()`, lock-free) is read at render to
+  show `txn: ACTIVE`. Grid commits use their own one-shot transaction
+  (`execute_transaction`), independent of any session transaction. See ADR-0003.
 
 - **Rendering is message-driven.** The terminal only redraws when
   `App::needs_redraw` is true. It is set on key events, on every `AppMsg`, and
