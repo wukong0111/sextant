@@ -31,10 +31,11 @@ names on purpose; this mapping is per-implementation and lives here.
 | 14 | Autocomplete de tablas y columnas | **E2E** | `autocomplete_inserts_table_name`; unit: `after_from_filters_by_prefix`, `dotted_table_offers_columns`, `ctrl_space_triggers_table_completion`, `enter_accepts_completion_and_replaces_prefix` |
 | 15 | Schema viewer (columnas en árbol) | **E2E** | `schema_viewer_shows_columns_in_tree`; unit: `expand_table_shows_columns` |
 | 16 | Pista de ayuda siempre visible | **APP** | `help_hint_stays_visible_with_grid_focused` (render con grid editable enfocado: la pista de ayuda persiste junto a las pistas contextuales) |
+| 17 | Realimentación de chord pendiente | **E2E+UNIT** | `leader_shows_which_key_menu` (popup tras leader → completa con `e`); unit `keymap.rs`: `leader_continuations_list_actions`, `non_leader_prefix_echoes_pending`, `pending_display_empty_when_idle`, `leader_key_is_recognized` |
 
 ## Resumen
 
-- **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15**.
+- **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15, 17**.
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
   **5, 6, 7, 8, 9, 12, 16**.
 - **Huecos reales**: ninguno pendiente.

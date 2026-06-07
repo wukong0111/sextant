@@ -8,7 +8,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{CTRL_E, CTRL_Q, CTRL_SPACE, ENTER, Fixture, TAB};
+use common::{CTRL_E, CTRL_Q, CTRL_SPACE, ENTER, Fixture, SPACE, TAB};
 
 #[test]
 fn boots_renders_connection_and_quits_cleanly() {
@@ -84,6 +84,31 @@ fn editor_query_is_recorded_in_history() {
         )
         .unwrap();
     assert_eq!(count, 1, "the executed query must be recorded in history");
+}
+
+#[test]
+fn leader_shows_which_key_menu() {
+    let fx = Fixture::sqlite("e2e-whichkey");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-whichkey", Duration::from_secs(10));
+
+    // Press the leader alone (no second key): the which-key popup appears,
+    // listing the continuations with their actions. "open SQL editor" only
+    // shows in this menu (the status hint reads "<Space>e editor").
+    tui.send(SPACE);
+    tui.wait_for("open SQL editor", Duration::from_secs(10));
+    tui.wait_for("query history", Duration::from_secs(10));
+
+    // Completing the chord (`e`) dismisses the menu and opens the editor.
+    tui.type_str("e");
+    tui.wait_for("insert", Duration::from_secs(10)); // editor Normal-mode hint
+
+    tui.esc(); // close editor
+    tui.send(CTRL_Q);
+    assert!(
+        tui.wait_exit(Duration::from_secs(10)),
+        "sextant should exit"
+    );
 }
 
 #[test]

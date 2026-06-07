@@ -38,3 +38,4 @@ Plantilla [Nygard](https://cognitect.com/blog/2011/11/15/documenting-architectur
 | [0003](0003-modelo-de-transacciones-hibrido-psql.md) | Modelo de transacciones híbrido psql-style | Aceptado |
 | [0004](0004-credenciales-via-keyring-del-so.md) | Credenciales vía keyring del SO | Aceptado |
 | [0005](0005-credential-store-inyectable-para-testabilidad.md) | `CredentialStore` inyectable para testabilidad | Aceptado |
+| [0006](0006-menu-which-key-solo-para-el-leader.md) | Menú which-key solo para el leader | Aceptado |

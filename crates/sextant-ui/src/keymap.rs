@@ -130,6 +130,12 @@ impl KeySpec {
         }
     }
 
+    /// Whether this key is the *leader* (`Space`) — the prefix that opens the
+    /// which-key menu, as opposed to ordinary multi-key prefixes (`g`, `d`).
+    pub fn is_leader(&self) -> bool {
+        self.code == KeyCode::Char(' ') && !self.ctrl
+    }
+
     /// Parse a single key token (`"<C-s>"`, `"<Space>"`, `"<Tab>"`, `"g"`).
     fn parse(token: &str) -> Option<Self> {
         if let Some(inner) = token.strip_prefix('<').and_then(|t| t.strip_suffix('>')) {
@@ -309,6 +315,23 @@ impl Keymap {
         out
     }
 
+    /// Build the which-key menu for an in-progress chord: the keys that can
+    /// continue `prefix`, each paired with the action it would trigger. Sorted
+    /// by key for a stable display; `None` if nothing continues `prefix`.
+    pub fn continuations(&self, prefix: &[KeySpec]) -> Vec<(String, &'static str)> {
+        let mut out: Vec<(String, &'static str)> = Vec::new();
+        for (specs, action) in &self.bindings {
+            if specs.len() > prefix.len() && specs.starts_with(prefix) {
+                let next = format_key(&specs[prefix.len()]);
+                if !out.iter().any(|(k, _)| *k == next) {
+                    out.push((next, action.label()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// Resolve a pending key sequence against the map.
     pub fn resolve(&self, seq: &[KeySpec]) -> Resolve {
         if let Some((_, action)) = self.bindings.iter().find(|(s, _)| s == seq) {
@@ -333,6 +356,21 @@ pub struct ChordState {
 }
 
 impl ChordState {
+    /// The keys pressed so far in the in-progress chord (empty when idle).
+    pub fn pending(&self) -> &[KeySpec] {
+        &self.pending
+    }
+
+    /// The pending sequence formatted for display (`<Space>`, `g`), or `None`
+    /// when no chord is in progress.
+    pub fn pending_display(&self) -> Option<String> {
+        if self.pending.is_empty() {
+            None
+        } else {
+            Some(format_chord(&self.pending))
+        }
+    }
+
     /// Feed one key. Returns `Some(action)` when a chord completes; otherwise
     /// `None` (either waiting for more keys, or the sequence was abandoned).
     ///
@@ -482,6 +520,44 @@ mod tests {
         let mut sorted = d.clone();
         sorted.sort();
         assert_eq!(d, sorted);
+    }
+
+    #[test]
+    fn leader_continuations_list_actions() {
+        let map = Keymap::defaults();
+        let mut state = ChordState::default();
+        assert_eq!(state.feed(&map, key(' ')), None);
+        let cont = map.continuations(state.pending());
+        assert!(cont.contains(&("e".to_string(), "open SQL editor")));
+        assert!(cont.contains(&("h".to_string(), "query history")));
+        // Sorted for a stable menu.
+        let mut sorted = cont.clone();
+        sorted.sort();
+        assert_eq!(cont, sorted);
+    }
+
+    #[test]
+    fn non_leader_prefix_echoes_pending() {
+        let map = Keymap::defaults();
+        let mut state = ChordState::default();
+        // `g` is a prefix of `gg`: pending, not leader, echoed as "g".
+        assert_eq!(state.feed(&map, key('g')), None);
+        assert_eq!(state.pending_display().as_deref(), Some("g"));
+        assert!(!state.pending()[0].is_leader());
+    }
+
+    #[test]
+    fn pending_display_empty_when_idle() {
+        let state = ChordState::default();
+        assert_eq!(state.pending_display(), None);
+    }
+
+    #[test]
+    fn leader_key_is_recognized() {
+        let map = Keymap::defaults();
+        let mut state = ChordState::default();
+        assert_eq!(state.feed(&map, key(' ')), None);
+        assert!(state.pending()[0].is_leader());
     }
 
     #[test]

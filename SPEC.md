@@ -371,7 +371,21 @@ Teclas internas del editor (alternar Insert/Normal, Run, Save) y de los modales
 (confirmar/cancelar) se gestionan en su propio contexto y no forman parte del
 keymap remapeable.
 
-### 12.4 Salida con cambios sin guardar
+### 12.4 Realimentación de chord pendiente
+
+Mientras una secuencia de teclas está **pendiente** (es prefijo de uno o más
+chords pero aún no completa), la app indica que el modo está **armado**, de modo
+que pulsar el prefijo nunca queda sin respuesta visible:
+
+- Al pulsar el **leader** (`Espacio`) aparece un **menú emergente** (*which-key*)
+  con las teclas que pueden continuarlo y la acción a la que lleva cada una.
+- Para cualquier otro prefijo (p. ej. `g` de `gg`, `d` de `dd`) se muestra una
+  **realimentación más ligera** (eco de la secuencia pendiente), **sin** menú.
+
+La realimentación refleja el keymap efectivo (respeta los remapeos del usuario)
+y desaparece al completar el chord, abandonarlo (tecla sin salida) o cancelarlo.
+
+### 12.5 Salida con cambios sin guardar
 
 *Quit* con buffers sucios abre un prompt **guardar / descartar / cancelar**.
 
@@ -572,6 +586,15 @@ concreto vive en cada implementación.
 - *When* la línea de estado muestra las pistas contextuales de edición
 - *Then* la pista de ayuda sigue presente al final de la línea, no la sustituyen
   las pistas contextuales
+
+**Realimentación de chord pendiente**
+- *Given* la app en modo Normal sin overlays
+- *When* se pulsa el leader (`Espacio`)
+- *Then* aparece un menú which-key con las continuaciones (`e` editor, `h`
+  historial, …) y la acción de cada una
+- *When* se pulsa un primer paso que no es leader (p. ej. `g` de `gg`)
+- *Then* se muestra un eco de la secuencia pendiente, sin menú
+- *And* al completar, abandonar o cancelar el chord, la realimentación desaparece
 
 ---
 
