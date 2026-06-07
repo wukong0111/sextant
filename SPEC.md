@@ -314,6 +314,9 @@ Siempre visible. Comunica, como mínimo:
   en autocommit.
 - Indicador de **solo lectura** (🔒) cuando el grid enfocado no es editable.
 - Un **spinner** mientras hay trabajo asíncrono en curso.
+- La **pista de ayuda** (chord que abre la pantalla de ayuda) **siempre
+  visible**, en cualquier foco o modo; las demás pistas son contextuales, pero
+  esta es el punto de entrada al resto y no debe desaparecer.
 
 ---
 
@@ -563,6 +566,12 @@ concreto vive en cada implementación.
 - *When* se expande una tabla
 - *Then* se listan sus columnas con su tipo declarado y una marca visible de
   clave primaria
+
+**Pista de ayuda siempre visible**
+- *Given* un grid editable con el foco puesto en él
+- *When* la línea de estado muestra las pistas contextuales de edición
+- *Then* la pista de ayuda sigue presente al final de la línea, no la sustituyen
+  las pistas contextuales
 
 ---
 

@@ -30,12 +30,13 @@ names on purpose; this mapping is per-implementation and lives here.
 | 13 | Remapeo de teclas | **UNIT** | `user_binding_overrides_default_chord`, `user_can_add_alternate_chord`, `unknown_action_name_is_skipped` |
 | 14 | Autocomplete de tablas y columnas | **E2E** | `autocomplete_inserts_table_name`; unit: `after_from_filters_by_prefix`, `dotted_table_offers_columns`, `ctrl_space_triggers_table_completion`, `enter_accepts_completion_and_replaces_prefix` |
 | 15 | Schema viewer (columnas en árbol) | **E2E** | `schema_viewer_shows_columns_in_tree`; unit: `expand_table_shows_columns` |
+| 16 | Pista de ayuda siempre visible | **APP** | `help_hint_stays_visible_with_grid_focused` (render con grid editable enfocado: la pista de ayuda persiste junto a las pistas contextuales) |
 
 ## Resumen
 
 - **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15**.
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
-  **5, 6, 7, 8, 9, 12**.
+  **5, 6, 7, 8, 9, 12, 16**.
 - **Huecos reales**: ninguno pendiente.
 
 ## Qué NO pueden cubrir los tests (verificación manual recurrente)
