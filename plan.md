@@ -145,12 +145,36 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 > **Nota de arquitectura (decisión tomada, Fase 0):** migrar de loop síncrono (`event::poll` + `event::read`) a loop **async híbrido** con `tokio::select!`. Fuentes: `crossterm::event::EventStream` (input), `mpsc` (resultados de query), timers (swap, cursor blink). Renderizar solo cuando `needs_redraw == true` o haya un tick de animación (spinner/cursor). Ver análisis completo en issue/discusión previa.
 
 ### Criterio de éxito v0.1
-- Arrancar, ver lista de conexiones.
-- Conectar a PG/SQLite.
-- Abrir editor (`<Space>e`), escribir `SELECT * FROM users`, `Ctrl+Enter`.
-- Ver resultados en grid.
-- Navegar grid con `hjkl`.
-- Desconectar, salir.
+
+> **Formato.** Los criterios se expresan como escenarios *Given / When / Then*
+> (lenguaje de pensamiento; no usamos Cucumber). Cada escenario lleva una
+> etiqueta **Cobertura** que apunta al test que lo verifica: `e2e:<fn>` para un
+> test PTY en `crates/sextant-cli/tests/e2e.rs`, o `manual:<doc §>` para lo que
+> hoy solo se valida a mano. Un escenario `manual:` es además un candidato a
+> automatizar.
+
+**Escenario: arranque, lista de conexiones y salida limpia**
+- **Given** una config con al menos una conexión definida
+- **When** se arranca el binario
+- **Then** el sidebar lista esa conexión y la status line indica que no hay
+  conexión activa
+- **And** `Ctrl+Q` cierra el proceso limpiamente (sin buffers sucios)
+- _Cobertura: `e2e:boots_renders_connection_and_quits_cleanly`_
+
+**Escenario: conectar, consultar y ver resultados**
+- **Given** la app arrancada con una conexión SQLite seleccionada
+- **When** se pulsa `Enter` para conectar
+- **Then** la introspección revela las tablas sembradas (p. ej. `users`)
+- **When** se abre el editor (`<Space>e`), se entra a insert (`i`), se escribe
+  una consulta y se ejecuta con `<C-e>`
+- **Then** el grid muestra las filas del resultado
+- _Cobertura: `e2e:editor_query_is_recorded_in_history`_
+
+**Escenario: navegación del grid**
+- **Given** un resultado cargado en el grid
+- **When** se navega con `hjkl`
+- **Then** la celda seleccionada se mueve en consecuencia
+- _Cobertura: `manual:MANUAL-QA.md` (follow-up: automatizar en e2e)_
 
 ---
 
@@ -210,10 +234,35 @@ Definir solo lo que Fase 1 necesita (nada especulativo):
 - [x] ✅ Confirmar al salir (`<C-q>`) si hay buffers dirty (save/discard/cancel).
 
 ### Criterio de éxito v0.2
-- Conectar a MySQL, PG, SQLite indistintamente.
-- Editar celdas, insertar filas, borrar, y commitear cambios.
-- Autocomplete funcional (tablas + columnas).
-- Ver schema expandido, browse rows (`SELECT * ... LIMIT 500`) y generar DDL.
+
+> Mismo formato Given/When/Then y etiqueta **Cobertura** que en v0.1.
+
+**Escenario: conexión multi-driver**
+- **Given** conexiones definidas para PostgreSQL, MySQL y SQLite
+- **When** se selecciona cualquiera de ellas y se pulsa `Enter`
+- **Then** la conexión se establece y la introspección lista sus tablas
+- _Cobertura: `e2e:*` (SQLite, vía los tests de boot/historial) · `manual:MANUAL-QA.md §4` (PG/MySQL, requieren Docker)_
+
+**Escenario: edición del grid (CRUD) con commit en lote**
+- **Given** una tabla con PK abierta en el grid (editable)
+- **When** se edita una celda (`Enter`), se añade una fila (`o`), se marca otra
+  para borrar (`dd`) y se confirma con `Ctrl+S`
+- **Then** un modal muestra los statements y, al aceptar, los cambios se aplican
+  en una sola transacción y el grid se refresca
+- _Cobertura: `manual:MANUAL-QA.md §2.2` (follow-up: automatizar en e2e)_
+
+**Escenario: autocomplete de tablas y columnas**
+- **Given** el editor abierto con una conexión activa
+- **When** se escribe un prefijo de nombre de tabla o columna
+- **Then** aparece la lista de candidatos del esquema y se puede insertar uno
+- _Cobertura: `manual:MANUAL-QA.md §2.3` (follow-up: automatizar en e2e)_
+
+**Escenario: schema viewer, browse y DDL**
+- **Given** una conexión activa en el sidebar
+- **When** se expande una tabla (`l`)
+- **Then** se ven sus columnas con marcas de PK, se puede hacer browse
+  (`SELECT * ... LIMIT 500`) y generar su DDL
+- _Cobertura: `manual:MANUAL-QA.md §2.4` (follow-up: automatizar en e2e)_
 
 ---
 
