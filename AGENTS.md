@@ -82,7 +82,12 @@ Full requirements in **`SPEC.md` §16**. Do not regress these:
 
 ## Development Workflow
 
-When the user asks to pick up a roadmap/backlog item or implement a feature (the `plan-task` skill drives this loop):
+**Any feature, bug fix, or refactor that changes observable behavior must follow this loop.** Do not write code until the spec and tests are in place.
+
+- **Before starting:** run the **`plan-task`** skill. It forces reading `SPEC.md`/`plan.md` first, confirming scope, and writing the §17 criterion.
+- **Before declaring done:** run the **`done-checklist`** skill. It verifies tests, docs, and `make check` were completed in the right order.
+
+The lifecycle is:
 
 1. **Read `plan.md` and `SPEC.md` first.** Don't assume something is done or undone without verifying it in the code.
 2. **Present options before acting.** If multiple approaches exist (library A vs B, architecture X vs Y), present tradeoffs and wait for a decision.

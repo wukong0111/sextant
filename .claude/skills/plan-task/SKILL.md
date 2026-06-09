@@ -9,6 +9,17 @@ Drive a feature or `plan.md` backlog item through the project's spec- and
 test-first lifecycle. This operationalizes the "Development Workflow" in
 `AGENTS.md` and the lifecycle in `docs/documentation-guide.md`.
 
+## When to use
+
+Use this skill **before writing any code** for:
+- A new feature or backlog item ("implement X", "pick up Y from plan.md").
+- A bug fix that changes observable behavior or requires a new test.
+- Any task where you are tempted to jump straight into exploring or editing code.
+
+> **Do not skip.** If the user gives a direct, technical-sounding order (e.g.
+> "add shortcut X", "fix render bug Y"), still run this skill. Turn the
+> technical request into a verifiable SPEC.md §17 criterion first.
+
 ## Steps
 
 1. **Read `plan.md` and `SPEC.md` first.** Identify the item; don't assume it's
