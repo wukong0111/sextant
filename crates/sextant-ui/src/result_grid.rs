@@ -1,14 +1,14 @@
-//! Result grid backed by `ratatui::widgets::Table`, with inline editing.
+//! Result grid with inline editing.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent},
-    layout::{Constraint, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Row, Table},
+    widgets::{Block, Borders},
 };
 use sextant_core::{CellValue, Driver, QueryResult};
 
@@ -52,6 +52,8 @@ pub struct ResultGrid {
     editing: Option<CellEdit>,
     /// Colors used when rendering.
     palette: Palette,
+    /// User-overridden column widths: `col_index -> width`.
+    column_widths: HashMap<usize, usize>,
 }
 
 impl ResultGrid {
@@ -74,6 +76,7 @@ impl ResultGrid {
         self.cursor_row = 0;
         self.cursor_col = 0;
         self.clear_pending();
+        self.column_widths.clear();
     }
 
     /// Set (or clear) the table context that makes the grid editable. Also
@@ -406,6 +409,42 @@ impl ResultGrid {
         stmts
     }
 
+    /// Widen the current column by 2 cells.
+    pub fn widen_column(&mut self) {
+        let Some(ref result) = self.result else {
+            return;
+        };
+        if self.cursor_col >= result.columns.len() {
+            return;
+        }
+        let auto = compute_auto_column_width(result, self.cursor_col);
+        let entry = self.column_widths.entry(self.cursor_col).or_insert(auto);
+        *entry = (*entry + 2).clamp(3, 200);
+    }
+
+    /// Narrow the current column by 2 cells.
+    pub fn narrow_column(&mut self) {
+        let Some(ref result) = self.result else {
+            return;
+        };
+        if self.cursor_col >= result.columns.len() {
+            return;
+        }
+        let auto = compute_auto_column_width(result, self.cursor_col);
+        let entry = self.column_widths.entry(self.cursor_col).or_insert(auto);
+        *entry = entry.saturating_sub(2).max(3);
+    }
+
+    /// Reset the current column to its auto-fitted width.
+    pub fn auto_fit_column(&mut self) {
+        self.column_widths.remove(&self.cursor_col);
+    }
+
+    /// Reset all columns to their auto-fitted widths.
+    pub fn auto_fit_all(&mut self) {
+        self.column_widths.clear();
+    }
+
     /// Render the grid (or a placeholder) into `area`.
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let p = self.palette;
@@ -428,81 +467,94 @@ impl ResultGrid {
             return;
         }
 
-        let widths = compute_column_widths(result);
+        let widths = compute_column_widths(result, &self.column_widths);
         let existing = result.rows.len();
 
         // Horizontal scroll: derive the first visible column each frame so the
         // selected cell stays on screen on tables wider than the viewport.
         let offset = first_visible_column(&widths, self.cursor_col, area.width, 1);
 
-        let header_cells: Vec<Cell> = result
-            .columns
-            .iter()
-            .enumerate()
-            .skip(offset)
-            .map(|(i, col)| {
-                let style = if i == self.cursor_col {
-                    Style::default().fg(p.selection_fg).bg(p.selection_bg)
-                } else {
-                    Style::default().fg(p.accent)
-                };
-                Cell::new(col.name.clone()).style(style)
-            })
-            .collect();
-        let header = Row::new(header_cells).style(Style::default().bg(p.background));
-
-        let rows: Vec<Row> = (0..self.total_rows())
-            .map(|row_idx| {
-                let is_new = row_idx >= existing;
-                let is_deleted = self.deleted.contains(&row_idx);
-                let cells: Vec<Cell> = (offset..result.columns.len())
-                    .map(|col_idx| {
-                        let editing_here = self
-                            .editing
-                            .as_ref()
-                            .map(|e| e.row == row_idx && e.col == col_idx)
-                            .unwrap_or(false);
-                        let text = if editing_here {
-                            self.editing.as_ref().unwrap().buffer.clone()
-                        } else {
-                            self.cell_display(row_idx, col_idx)
-                        };
-                        let is_active = row_idx == self.cursor_row && col_idx == self.cursor_col;
-                        let is_edited = self.edits.contains_key(&(row_idx, col_idx));
-                        let style = if is_active {
-                            Style::default().fg(p.background).bg(p.accent_alt)
-                        } else if is_deleted {
-                            Style::default()
-                                .fg(p.error)
-                                .add_modifier(Modifier::CROSSED_OUT)
-                        } else if is_new {
-                            Style::default().fg(p.success)
-                        } else if is_edited {
-                            Style::default().fg(p.accent_alt)
-                        } else if row_idx == self.cursor_row {
-                            Style::default().bg(p.muted)
-                        } else {
-                            Style::default().fg(p.foreground)
-                        };
-                        Cell::new(text).style(style)
-                    })
-                    .collect();
-                Row::new(cells)
-            })
-            .collect();
-
-        let constraints: Vec<Constraint> = widths[offset..]
-            .iter()
-            .map(|&w| Constraint::Length(w as u16))
-            .collect();
-
-        let table = Table::new(rows, constraints).header(header).block(
+        // Paint the background first so empty areas are filled.
+        frame.render_widget(
             Block::default()
                 .borders(Borders::NONE)
                 .style(Style::default().bg(p.background)),
+            area,
         );
 
-        frame.render_widget(table, area);
+        let mut x = area.x;
+        for (col_idx, col) in result.columns.iter().enumerate().skip(offset) {
+            let col_width = widths[col_idx] as u16;
+
+            // Column spacing (1 cell) — skip if no room left.
+            if col_idx > offset {
+                if x >= area.x + area.width {
+                    break;
+                }
+                x += 1;
+            }
+
+            let remaining = area.x + area.width - x;
+            if remaining == 0 {
+                break;
+            }
+            let render_width = col_width.min(remaining);
+
+            // Header cell.
+            let header_style = if col_idx == self.cursor_col {
+                Style::default().fg(p.selection_fg).bg(p.selection_bg)
+            } else {
+                Style::default().fg(p.accent)
+            };
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(col.name.clone()).style(header_style),
+                Rect::new(x, area.y, render_width, 1),
+            );
+
+            // Data cells.
+            for row_idx in 0..self.total_rows() {
+                let row_y = area.y + 1 + row_idx as u16;
+                if row_y >= area.y + area.height {
+                    break;
+                }
+
+                let editing_here = self
+                    .editing
+                    .as_ref()
+                    .map(|e| e.row == row_idx && e.col == col_idx)
+                    .unwrap_or(false);
+                let text = if editing_here {
+                    self.editing.as_ref().unwrap().buffer.clone()
+                } else {
+                    self.cell_display(row_idx, col_idx)
+                };
+                let is_active = row_idx == self.cursor_row && col_idx == self.cursor_col;
+                let is_edited = self.edits.contains_key(&(row_idx, col_idx));
+                let is_deleted = self.deleted.contains(&row_idx);
+                let is_new = row_idx >= existing;
+                let style = if is_active {
+                    Style::default().fg(p.background).bg(p.accent_alt)
+                } else if is_deleted {
+                    Style::default()
+                        .fg(p.error)
+                        .add_modifier(Modifier::CROSSED_OUT)
+                } else if is_new {
+                    Style::default().fg(p.success)
+                } else if is_edited {
+                    Style::default().fg(p.accent_alt)
+                } else if row_idx == self.cursor_row {
+                    Style::default().bg(p.muted)
+                } else {
+                    Style::default().fg(p.foreground)
+                };
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new(text).style(style),
+                    Rect::new(x, row_y, render_width, 1),
+                );
+            }
+
+            x += col_width;
+        }
     }
 
     /// Current cursor row (useful for tests).
@@ -537,21 +589,25 @@ fn cell_value_to_string(value: &CellValue) -> String {
     }
 }
 
-/// Compute per-column display widths.
-/// Width = max(header_len, max_cell_len) clamped to [3, 40].
-fn compute_column_widths(result: &QueryResult) -> Vec<usize> {
-    let mut widths: Vec<usize> = result.columns.iter().map(|c| c.name.len()).collect();
-
+/// Compute the auto-fitted width for a single column.
+fn compute_auto_column_width(result: &QueryResult, col: usize) -> usize {
+    let mut w = result.columns.get(col).map(|c| c.name.len()).unwrap_or(3);
     for row in &result.rows {
-        for (i, cell) in row.iter().enumerate() {
-            if let Some(w) = widths.get_mut(i) {
-                let len = cell_value_to_string(cell).len();
-                *w = (*w).max(len);
-            }
+        if let Some(cell) = row.get(col) {
+            w = w.max(cell_value_to_string(cell).len());
         }
     }
+    w.clamp(3, 40)
+}
 
-    widths.iter().map(|&w| w.clamp(3, 40)).collect()
+/// Compute per-column display widths, blending auto-fit with user overrides.
+fn compute_column_widths(result: &QueryResult, overrides: &HashMap<usize, usize>) -> Vec<usize> {
+    (0..result.columns.len())
+        .map(|i| {
+            let auto = compute_auto_column_width(result, i);
+            overrides.get(&i).copied().unwrap_or(auto).clamp(3, 200)
+        })
+        .collect()
 }
 
 /// First column to render so that `cursor_col` stays within `area_width`.
@@ -581,6 +637,9 @@ fn first_visible_column(
     }
     offset
 }
+
+/// Number of columns that fit in `area_width` starting from `offset`.
+///
 
 #[cfg(test)]
 mod tests {
@@ -810,7 +869,7 @@ mod tests {
             rows: vec![vec![CellValue::String(long_string)]],
             rows_affected: None,
         };
-        let widths = compute_column_widths(&result);
+        let widths = compute_column_widths(&result, &HashMap::new());
         assert_eq!(widths, vec![40]);
     }
 
@@ -991,6 +1050,114 @@ mod tests {
         assert_eq!(
             stmts,
             vec!["UPDATE \"main\".\"users\" SET \"id\" = '100' WHERE \"id\" = '1'".to_string()]
+        );
+    }
+
+    #[test]
+    fn widen_column_changes_rendered_width() {
+        let result = QueryResult {
+            columns: vec![
+                Column {
+                    name: "id".into(),
+                    type_name: "int".into(),
+                },
+                Column {
+                    name: "name".into(),
+                    type_name: "text".into(),
+                },
+                Column {
+                    name: "email".into(),
+                    type_name: "text".into(),
+                },
+            ],
+            rows: vec![
+                vec![
+                    CellValue::I64(1),
+                    CellValue::String("Alice".into()),
+                    CellValue::String("alice@example.com".into()),
+                ],
+                vec![
+                    CellValue::I64(2),
+                    CellValue::String("Bob".into()),
+                    CellValue::String("bob@example.com".into()),
+                ],
+            ],
+            rows_affected: None,
+        };
+
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(result));
+        grid.cursor_col = 1; // name
+
+        // Render before widen.
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+        let buf_before = terminal.backend().buffer().clone();
+
+        grid.widen_column();
+
+        // Render after widen.
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+        let buf_after = terminal.backend().buffer();
+
+        // The buffers should differ because the column width changed.
+        assert_ne!(
+            buf_before.content, buf_after.content,
+            "widening column 1 should change the rendered buffer"
+        );
+    }
+
+    #[test]
+    fn narrow_column_changes_rendered_width() {
+        let result = QueryResult {
+            columns: vec![
+                Column {
+                    name: "id".into(),
+                    type_name: "int".into(),
+                },
+                Column {
+                    name: "name".into(),
+                    type_name: "text".into(),
+                },
+                Column {
+                    name: "email".into(),
+                    type_name: "text".into(),
+                },
+            ],
+            rows: vec![vec![
+                CellValue::I64(1),
+                CellValue::String("Alice".into()),
+                CellValue::String("alice@example.com".into()),
+            ]],
+            rows_affected: None,
+        };
+
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(result));
+        grid.cursor_col = 2; // email
+
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+        let buf_before = terminal.backend().buffer().clone();
+
+        grid.narrow_column();
+
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+        let buf_after = terminal.backend().buffer();
+
+        assert_ne!(
+            buf_before.content, buf_after.content,
+            "narrowing column 2 should change the rendered buffer"
         );
     }
 }

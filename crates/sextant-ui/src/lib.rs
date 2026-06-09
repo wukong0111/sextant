@@ -883,6 +883,26 @@ impl App {
             Action::OpenFile => self.open_file_finder(),
             Action::Snippets => self.open_snippets(tx),
             Action::SaveSnippet => self.begin_save_snippet(),
+            Action::WidenColumn => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.widen_column();
+                }
+            }
+            Action::NarrowColumn => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.narrow_column();
+                }
+            }
+            Action::AutoFitColumn => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.auto_fit_column();
+                }
+            }
+            Action::AutoFitAll => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.auto_fit_all();
+                }
+            }
         }
     }
 

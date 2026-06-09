@@ -518,6 +518,14 @@ concreto vive en cada implementación.
 - *Then* la rejilla se desplaza horizontalmente y la columna seleccionada queda
   visible
 
+**Redimensionamiento de columnas del grid**
+- *Given* un grid con resultados visibles y el foco en el grid
+- *When* se ejecuta WidenColumn o NarrowColumn sobre la columna seleccionada
+- *Then* el ancho de esa columna aumenta o disminuye de forma visible, empujando
+  las columnas siguientes o mostrando su contenido truncado
+- *And* AutoFitColumn restaura el ancho de la columna seleccionada al auto-fit
+- *And* AutoFitAll restaura todos los anchos sobrescritos
+
 **Edición del grid con concurrencia optimista**
 - *Given* una tabla **con clave primaria** abierta en el grid
 - *When* se edita una celda, se añade una fila y se marca otra para borrar, y se

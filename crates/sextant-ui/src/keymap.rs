@@ -44,6 +44,10 @@ pub enum Action {
     OpenFile,
     Snippets,
     SaveSnippet,
+    WidenColumn,
+    NarrowColumn,
+    AutoFitColumn,
+    AutoFitAll,
 }
 
 impl Action {
@@ -75,6 +79,10 @@ impl Action {
             "open_file" => Action::OpenFile,
             "snippets" => Action::Snippets,
             "save_snippet" => Action::SaveSnippet,
+            "widen_column" => Action::WidenColumn,
+            "narrow_column" => Action::NarrowColumn,
+            "auto_fit_column" => Action::AutoFitColumn,
+            "auto_fit_all" => Action::AutoFitAll,
             _ => return None,
         })
     }
@@ -107,6 +115,10 @@ impl Action {
             Action::OpenFile => "open .sql file",
             Action::Snippets => "insert snippet",
             Action::SaveSnippet => "save buffer as snippet",
+            Action::WidenColumn => "widen current column",
+            Action::NarrowColumn => "narrow current column",
+            Action::AutoFitColumn => "auto-fit current column",
+            Action::AutoFitAll => "auto-fit all columns",
         }
     }
 }
@@ -185,10 +197,16 @@ fn tokenize(chord: &str) -> Option<Vec<KeySpec>> {
     let mut i = 0;
     while i < chars.len() {
         if chars[i] == '<' {
-            let end = chars[i..].iter().position(|&c| c == '>')? + i;
-            let token: String = chars[i..=end].iter().collect();
-            specs.push(KeySpec::parse(&token)?);
-            i = end + 1;
+            if let Some(end) = chars[i..].iter().position(|&c| c == '>') {
+                let end = end + i;
+                let token: String = chars[i..=end].iter().collect();
+                specs.push(KeySpec::parse(&token)?);
+                i = end + 1;
+            } else {
+                // Unmatched '<' is treated as the literal character.
+                specs.push(KeySpec::parse(&chars[i].to_string())?);
+                i += 1;
+            }
         } else {
             specs.push(KeySpec::parse(&chars[i].to_string())?);
             i += 1;
@@ -269,6 +287,10 @@ impl Keymap {
             ("<Space>o", Action::OpenFile),
             ("<Space>s", Action::Snippets),
             ("<Space>S", Action::SaveSnippet),
+            (">", Action::WidenColumn),
+            ("<", Action::NarrowColumn),
+            ("<Space>w", Action::AutoFitColumn),
+            ("<Space>W", Action::AutoFitAll),
         ];
         let mut map = Self {
             bindings: Vec::new(),
@@ -428,6 +450,19 @@ mod tests {
                 ctrl: false
             }])
         );
+    }
+
+    #[test]
+    fn tokenizes_literal_less_than() {
+        assert_eq!(tokenize("<"), Some(vec![key('<')]));
+        assert_eq!(tokenize("<<"), Some(vec![key('<'), key('<')]));
+    }
+
+    #[test]
+    fn less_than_resolves_to_narrow_column() {
+        let map = Keymap::defaults();
+        let mut state = ChordState::default();
+        assert_eq!(state.feed(&map, key('<')), Some(Action::NarrowColumn));
     }
 
     #[test]

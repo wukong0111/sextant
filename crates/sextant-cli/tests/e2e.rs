@@ -112,6 +112,251 @@ fn leader_shows_which_key_menu() {
 }
 
 #[test]
+fn grid_columns_resize_on_full_schema() {
+    // Use the real seeds/sqlite.sql which has a 13-column users table.
+    let fx = Fixture::sqlite_full("e2e-resize-full");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-resize-full", Duration::from_secs(10));
+
+    tui.send(ENTER);
+    tui.wait_for("users", Duration::from_secs(15));
+    // Navigate past main schema to reach users (orders, products, sqlite_sequence, type_samples, users).
+    for _ in 0..6 {
+        tui.type_str("j");
+    }
+    tui.send(ENTER);
+    tui.wait_for("Alice", Duration::from_secs(10));
+
+    // Move cursor id -> name.
+    tui.type_str("l");
+    std::thread::sleep(Duration::from_millis(100));
+
+    let before_narrow_name = tui.row_text(1, 20, 60);
+
+    // Narrow name well below its content to force truncation.
+    for _ in 0..5 {
+        tui.type_str("<");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let after_narrow_name = tui.row_text(1, 20, 60);
+    assert_ne!(
+        before_narrow_name, after_narrow_name,
+        "narrowing 'name' should change the data row; before={before_narrow_name:?} after={after_narrow_name:?}"
+    );
+
+    // Restore name with auto-fit.
+    tui.leader("w");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        before_narrow_name,
+        tui.row_text(1, 20, 60),
+        "restoring 'name' should restore the data row"
+    );
+
+    // Move cursor name -> email.
+    tui.type_str("l");
+    std::thread::sleep(Duration::from_millis(100));
+
+    let before_narrow_email = tui.row_text(1, 20, 60);
+
+    // Narrow email well below its content to force truncation.
+    for _ in 0..8 {
+        tui.type_str("<");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let after_narrow_email = tui.row_text(1, 20, 60);
+    assert_ne!(
+        before_narrow_email, after_narrow_email,
+        "narrowing 'email' should change the data row; before={before_narrow_email:?} after={after_narrow_email:?}"
+    );
+
+    // Restore email with auto-fit.
+    tui.leader("w");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        before_narrow_email,
+        tui.row_text(1, 20, 60),
+        "restoring 'email' should restore the data row"
+    );
+
+    tui.send(CTRL_Q);
+    assert!(
+        tui.wait_exit(Duration::from_secs(10)),
+        "sextant should exit"
+    );
+}
+
+#[test]
+fn grid_columns_can_be_resized() {
+    let fx = Fixture::sqlite("e2e-resize");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-resize", Duration::from_secs(10));
+
+    // Connect and browse the users table.
+    tui.send(ENTER);
+    tui.wait_for("users", Duration::from_secs(15));
+    tui.type_str("j");
+    tui.type_str("j");
+    tui.send(ENTER);
+    tui.wait_for("alice", Duration::from_secs(10));
+
+    // --- id column (cursor already here) ---
+    let before = tui.row_text(0, 20, 60);
+    for _ in 0..5 {
+        tui.type_str(">");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_ne!(
+        before,
+        tui.row_text(0, 20, 60),
+        "widening 'id' should change layout"
+    );
+
+    for _ in 0..5 {
+        tui.type_str("<");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        before,
+        tui.row_text(0, 20, 60),
+        "narrowing 'id' should restore layout"
+    );
+
+    // --- name column ---
+    tui.type_str("l");
+    std::thread::sleep(Duration::from_millis(100));
+    let before = tui.row_text(0, 20, 60);
+    for _ in 0..5 {
+        tui.type_str(">");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_ne!(
+        before,
+        tui.row_text(0, 20, 60),
+        "widening 'name' should change layout"
+    );
+
+    for _ in 0..5 {
+        tui.type_str("<");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        before,
+        tui.row_text(0, 20, 60),
+        "narrowing 'name' should restore layout"
+    );
+
+    // --- email column ---
+    tui.type_str("l");
+    std::thread::sleep(Duration::from_millis(100));
+    let before_hdr = tui.row_text(0, 20, 60);
+    let before_data = tui.row_text(1, 20, 60);
+    for _ in 0..5 {
+        tui.type_str(">");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_ne!(
+        before_hdr,
+        tui.row_text(0, 20, 60),
+        "widening 'email' should change layout"
+    );
+
+    for _ in 0..5 {
+        tui.type_str("<");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        before_hdr,
+        tui.row_text(0, 20, 60),
+        "narrowing 'email' should restore layout"
+    );
+    assert_eq!(
+        before_data,
+        tui.row_text(1, 20, 60),
+        "data row should also be restored"
+    );
+
+    // Narrow email below its content length to force visible truncation.
+    for _ in 0..5 {
+        tui.type_str("<");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let truncated = tui.row_text(1, 20, 60);
+    assert_ne!(
+        before_data, truncated,
+        "narrowing 'email' below auto-width should truncate cell content"
+    );
+
+    // Restore email.
+    for _ in 0..5 {
+        tui.type_str(">");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        before_data,
+        tui.row_text(1, 20, 60),
+        "restoring 'email' should restore data"
+    );
+
+    // --- active column ---
+    tui.type_str("l");
+    std::thread::sleep(Duration::from_millis(100));
+    let before = tui.row_text(0, 20, 60);
+    for _ in 0..5 {
+        tui.type_str(">");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_ne!(
+        before,
+        tui.row_text(0, 20, 60),
+        "widening 'active' should change layout"
+    );
+
+    for _ in 0..5 {
+        tui.type_str("<");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        before,
+        tui.row_text(0, 20, 60),
+        "narrowing 'active' should restore layout"
+    );
+
+    // --- age column (last visible) ---
+    // Widening the last visible column only adds empty space to its right,
+    // which is indistinguishable in the header row. We verify the data row
+    // still contains the expected values instead.
+    tui.type_str("l");
+    std::thread::sleep(Duration::from_millis(100));
+    let before = tui.row_text(1, 20, 60);
+    for _ in 0..5 {
+        tui.type_str(">");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let after = tui.row_text(1, 20, 60);
+    assert!(
+        after.contains("30"),
+        "widening 'age' should not hide its content"
+    );
+
+    for _ in 0..5 {
+        tui.type_str("<");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        before,
+        tui.row_text(1, 20, 60),
+        "narrowing 'age' should restore data row"
+    );
+
+    tui.send(CTRL_Q);
+    assert!(
+        tui.wait_exit(Duration::from_secs(10)),
+        "sextant should exit"
+    );
+}
+
+#[test]
 fn exports_result_set_to_csv_file() {
     let fx = Fixture::sqlite("e2e-export");
     let mut tui = fx.spawn();

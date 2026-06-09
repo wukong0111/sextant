@@ -101,6 +101,17 @@ impl Tui {
         self.parser.lock().unwrap().screen().contents()
     }
 
+    /// Text of a specific screen row, restricted to a column range.
+    pub fn row_text(&self, row: u16, start: u16, width: u16) -> String {
+        self.parser
+            .lock()
+            .unwrap()
+            .screen()
+            .rows(start, width)
+            .nth(row as usize)
+            .unwrap_or_default()
+    }
+
     /// Print the current screen to stderr (visible with `--nocapture`).
     pub fn dump(&self, label: &str) {
         eprintln!(
@@ -177,11 +188,21 @@ pub struct Fixture {
 
 impl Fixture {
     /// Create a temp environment with one SQLite connection named `conn_name`
-    /// pointing at a freshly seeded `test.db`.
+    /// pointing at a freshly seeded `test.db` (minimal schema).
     pub fn sqlite(conn_name: &str) -> Self {
         let home = tempfile::tempdir().unwrap();
         let db = home.path().join("test.db");
         seed_sqlite(&db);
+        write_sqlite_connection(home.path(), conn_name, &db);
+        Fixture { home, db }
+    }
+
+    /// Create a temp environment using the full `seeds/sqlite.sql` schema
+    /// (13-column `users` table, orders, products, type_samples).
+    pub fn sqlite_full(conn_name: &str) -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let db = home.path().join("test.db");
+        seed_sqlite_full(&db);
         write_sqlite_connection(home.path(), conn_name, &db);
         Fixture { home, db }
     }
@@ -222,8 +243,15 @@ pub fn write_sqlite_connection(home: &Path, name: &str, db_path: &Path) {
 pub fn seed_sqlite(db_path: &Path) {
     let conn = rusqlite::Connection::open(db_path).unwrap();
     conn.execute_batch(
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
-         INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob');",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, active INTEGER, age INTEGER);
+         INSERT INTO users (id, name, email, active, age) VALUES (1, 'alice', 'alice@example.com', 1, 30), (2, 'bob', 'bob@example.com', 0, 25);",
     )
     .unwrap();
+}
+
+/// Seed a SQLite database with the full workspace `seeds/sqlite.sql` script.
+pub fn seed_sqlite_full(db_path: &Path) {
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    let sql = include_str!("../../../../seeds/sqlite.sql");
+    conn.execute_batch(sql).unwrap();
 }
