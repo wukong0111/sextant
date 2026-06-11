@@ -48,6 +48,8 @@ pub enum Action {
     NarrowColumn,
     AutoFitColumn,
     AutoFitAll,
+    EnterVisualMode,
+    CopySelection,
 }
 
 impl Action {
@@ -83,6 +85,8 @@ impl Action {
             "narrow_column" => Action::NarrowColumn,
             "auto_fit_column" => Action::AutoFitColumn,
             "auto_fit_all" => Action::AutoFitAll,
+            "enter_visual_mode" => Action::EnterVisualMode,
+            "copy_selection" => Action::CopySelection,
             _ => return None,
         })
     }
@@ -119,6 +123,8 @@ impl Action {
             Action::NarrowColumn => "narrow current column",
             Action::AutoFitColumn => "auto-fit current column",
             Action::AutoFitAll => "auto-fit all columns",
+            Action::EnterVisualMode => "enter visual mode (grid selection)",
+            Action::CopySelection => "copy selection",
         }
     }
 }
@@ -291,6 +297,8 @@ impl Keymap {
             ("<", Action::NarrowColumn),
             ("<Space>w", Action::AutoFitColumn),
             ("<Space>W", Action::AutoFitAll),
+            ("v", Action::EnterVisualMode),
+            ("<C-c>", Action::CopySelection),
         ];
         let mut map = Self {
             bindings: Vec::new(),

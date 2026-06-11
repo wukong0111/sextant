@@ -39,6 +39,7 @@ mod tree_pane;
 use tree_pane::{ColumnNode, ConnState, SchemaItem, TableItem, TreePane};
 
 mod result_grid;
+pub use result_grid::CopyFormat;
 use result_grid::ResultGrid;
 
 /// Messages that flow through the application event loop.
@@ -113,6 +114,8 @@ enum PickerAction {
     OpenFile(std::path::PathBuf),
     /// Export the current result set in the chosen format.
     Export(sextant_db::ExportFormat),
+    /// Copy the selected grid range in the chosen format.
+    CopyFormat(CopyFormat),
 }
 
 /// An import in progress: the chosen target table and the file path being typed.
@@ -180,6 +183,7 @@ struct PendingImport {
 pub enum Mode {
     Normal,
     Insert,
+    Visual,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +197,7 @@ impl std::fmt::Display for Mode {
         match self {
             Mode::Normal => write!(f, "NOR"),
             Mode::Insert => write!(f, "INS"),
+            Mode::Visual => write!(f, "VIS"),
         }
     }
 }
@@ -223,6 +228,8 @@ pub struct App {
     state_store: Option<sextant_state::StateStore>,
     /// Active modal list picker (history / recent files), if any.
     picker: Option<Picker>,
+    /// Active copy-format picker (CSV / JSON / SQL INSERT), if any.
+    copy_format_picker: Option<Picker>,
     /// Active import file-path prompt, if any.
     import_prompt: Option<ImportPrompt>,
     /// Parsed import awaiting confirmation, if any.
@@ -308,6 +315,7 @@ impl App {
             quit_prompt: false,
             state_store: None,
             picker: None,
+            copy_format_picker: None,
             import_prompt: None,
             pending_import: None,
             pending_dangerous: None,
@@ -389,6 +397,11 @@ impl App {
             render_picker(frame, area, picker, self.palette);
         }
 
+        // Copy-format picker.
+        if let Some(picker) = &self.copy_format_picker {
+            render_picker(frame, area, picker, self.palette);
+        }
+
         // Import file-path prompt.
         if let Some(prompt) = &self.import_prompt {
             render_import_prompt(frame, area, prompt, self.palette);
@@ -439,15 +452,14 @@ impl App {
 
         // Status line at the bottom.
         let p = self.palette;
+        let mode_bg = match self.mode {
+            Mode::Normal => p.accent,
+            Mode::Insert => p.accent_alt,
+            Mode::Visual => p.success,
+        };
         let mode_span = Span::styled(
             format!(" {} ", self.mode),
-            Style::default()
-                .fg(p.background)
-                .bg(if self.mode == Mode::Normal {
-                    p.accent
-                } else {
-                    p.accent_alt
-                }),
+            Style::default().fg(p.background).bg(mode_bg),
         );
 
         // Pending-chord echo: the leader gets the which-key popup (rendered
@@ -747,6 +759,18 @@ impl App {
             return;
         }
 
+        // Copy-format picker swallows keys until closed.
+        if self.copy_format_picker.is_some() {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => self.copy_format_picker_move(1),
+                KeyCode::Char('k') | KeyCode::Up => self.copy_format_picker_move(-1),
+                KeyCode::Enter => self.copy_format_picker_select(),
+                KeyCode::Esc => self.copy_format_picker = None,
+                _ => {}
+            }
+            return;
+        }
+
         // Destructive-statement confirmation swallows keys until dismissed.
         if self.pending_dangerous.is_some() {
             match key.code {
@@ -784,6 +808,28 @@ impl App {
         if self.focus == Focus::Grid && self.result_grid.is_editing() {
             if !self.result_grid.handle_edit_key(key) {
                 self.mode = Mode::Normal;
+            }
+            return;
+        }
+
+        // Visual mode captures h/j/k/l, Esc, v, and <C-c> before the normal keymap.
+        if self.mode == Mode::Visual {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('v') => {
+                    self.mode = Mode::Normal;
+                    self.result_grid.exit_visual_mode();
+                    return;
+                }
+                KeyCode::Char('h') => self.result_grid.move_left(),
+                KeyCode::Char('j') => self.result_grid.move_down(),
+                KeyCode::Char('k') => self.result_grid.move_up(),
+                KeyCode::Char('l') => self.result_grid.move_right(),
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.open_copy_format_picker();
+                }
+                _ => {
+                    // Ignore unrecognised keys in visual mode (user must exit first).
+                }
             }
             return;
         }
@@ -902,6 +948,16 @@ impl App {
                 if self.focus == Focus::Grid {
                     self.result_grid.auto_fit_all();
                 }
+            }
+            Action::EnterVisualMode => {
+                if self.focus == Focus::Grid && self.result_grid.result().is_some() {
+                    self.result_grid.enter_visual_mode();
+                    self.mode = Mode::Visual;
+                }
+            }
+            Action::CopySelection => {
+                // CopySelection is handled directly in visual mode key capture;
+                // in normal mode it is a no-op.
             }
         }
     }
@@ -2026,6 +2082,90 @@ impl App {
                 Err(e) => self.last_error = Some(format!("open failed: {e}")),
             },
             PickerAction::Export(format) => self.run_export(format, tx),
+            PickerAction::CopyFormat(_) => {
+                // Copy-format picker has its own select handler.
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Copy-format picker helpers
+    // ------------------------------------------------------------------
+
+    fn open_copy_format_picker(&mut self) {
+        let has_ctx = self.result_grid.edit_context().is_some();
+        let items = vec![
+            PickerItem {
+                label: "CSV".to_string(),
+                action: PickerAction::CopyFormat(CopyFormat::Csv),
+            },
+            PickerItem {
+                label: "JSON".to_string(),
+                action: PickerAction::CopyFormat(CopyFormat::Json),
+            },
+            PickerItem {
+                label: if has_ctx {
+                    "SQL INSERT".to_string()
+                } else {
+                    "SQL INSERT (requires table context)".to_string()
+                },
+                action: PickerAction::CopyFormat(CopyFormat::SqlInsert),
+            },
+        ];
+        self.copy_format_picker = Some(Picker {
+            title: "Copy as".to_string(),
+            items,
+            selected: 0,
+        });
+    }
+
+    fn copy_format_picker_move(&mut self, delta: isize) {
+        if let Some(p) = self.copy_format_picker.as_mut() {
+            if p.items.is_empty() {
+                return;
+            }
+            let len = p.items.len() as isize;
+            p.selected = (p.selected as isize + delta).rem_euclid(len) as usize;
+        }
+    }
+
+    fn copy_format_picker_select(&mut self) {
+        let Some(picker) = self.copy_format_picker.take() else {
+            return;
+        };
+        let Picker {
+            items, selected, ..
+        } = picker;
+        let Some(item) = items.into_iter().nth(selected) else {
+            return;
+        };
+        let PickerAction::CopyFormat(format) = item.action else {
+            return;
+        };
+
+        match self.result_grid.copy(format) {
+            Ok(text) => {
+                if let Err(e) = set_clipboard(&text) {
+                    self.last_error = Some(format!("clipboard error: {e}"));
+                } else {
+                    let rows = self
+                        .result_grid
+                        .selected_range()
+                        .map(|(min_r, _, max_r, _)| max_r - min_r + 1)
+                        .unwrap_or(0);
+                    self.last_notice = Some(format!(
+                        "Copied {rows} row(s) as {}",
+                        match format {
+                            CopyFormat::Csv => "CSV",
+                            CopyFormat::Json => "JSON",
+                            CopyFormat::SqlInsert => "SQL INSERT",
+                        }
+                    ));
+                }
+            }
+            Err(e) => {
+                self.last_error = Some(e);
+            }
         }
     }
 
@@ -2223,6 +2363,54 @@ impl App {
         };
         self.editor.set_content(&combined);
     }
+}
+
+/// Write `text` to the system clipboard.
+///
+/// On Linux prefers `wl-copy` (Wayland) or `xclip` (X11) over `arboard`,
+/// because TUI applications often lack a window that can serve X11
+/// `SelectionRequest` events.
+fn set_clipboard(text: &str) -> Result<(), String> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        if let Ok(mut child) = std::process::Command::new("wl-copy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            use std::io::Write;
+            if let Some(stdin) = child.stdin.take() {
+                let mut stdin = stdin;
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    drop(stdin);
+                    if child.wait().is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    if std::env::var_os("DISPLAY").is_some() {
+        if let Ok(mut child) = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            use std::io::Write;
+            if let Some(stdin) = child.stdin.take() {
+                let mut stdin = stdin;
+                if stdin.write_all(text.as_bytes()).is_ok() {
+                    drop(stdin);
+                    if child.wait().is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    // Fallback to arboard (works on macOS, Windows, and some Linux setups).
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| e.to_string())
 }
 
 /// Run the TUI event loop until the user quits.

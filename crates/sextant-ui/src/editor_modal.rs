@@ -308,6 +308,33 @@ impl EditorModal {
                 KeyCode::Esc => (super::Mode::Normal, EditorAction::Close),
                 _ => (super::Mode::Normal, EditorAction::None),
             },
+            super::Mode::Visual => {
+                // Visual mode should not reach the editor, but treat it like Normal.
+                match key.code {
+                    KeyCode::Char('i') if key.modifiers.is_empty() => {
+                        (super::Mode::Insert, EditorAction::None)
+                    }
+                    KeyCode::Tab => {
+                        self.next_buffer();
+                        (super::Mode::Visual, EditorAction::None)
+                    }
+                    KeyCode::BackTab => {
+                        self.prev_buffer();
+                        (super::Mode::Visual, EditorAction::None)
+                    }
+                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        (super::Mode::Visual, EditorAction::Save)
+                    }
+                    KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        (super::Mode::Visual, EditorAction::Execute)
+                    }
+                    KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        (super::Mode::Visual, EditorAction::Execute)
+                    }
+                    KeyCode::Esc => (super::Mode::Normal, EditorAction::Close),
+                    _ => (super::Mode::Visual, EditorAction::None),
+                }
+            }
             super::Mode::Insert => {
                 // Manual trigger works whether or not the popup is already open.
                 if key.code == KeyCode::Char(' ') && key.modifiers.contains(KeyModifiers::CONTROL) {

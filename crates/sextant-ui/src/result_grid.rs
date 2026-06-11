@@ -14,6 +14,14 @@ use sextant_core::{CellValue, Driver, QueryResult};
 
 use crate::palette::Palette;
 
+/// Format for copying the selected grid range to the clipboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyFormat {
+    Csv,
+    Json,
+    SqlInsert,
+}
+
 /// Identifies the table a grid was populated from, enabling edits.
 ///
 /// A grid is editable only when it has an `EditContext` **and** a non-empty
@@ -54,6 +62,10 @@ pub struct ResultGrid {
     palette: Palette,
     /// User-overridden column widths: `col_index -> width`.
     column_widths: HashMap<usize, usize>,
+    /// Anchor cell of the visual selection (row, col).
+    selection_anchor: Option<(usize, usize)>,
+    /// Whether a visual selection is currently active.
+    selection_active: bool,
 }
 
 impl ResultGrid {
@@ -76,6 +88,7 @@ impl ResultGrid {
         self.cursor_row = 0;
         self.cursor_col = 0;
         self.clear_pending();
+        self.clear_selection();
         self.column_widths.clear();
     }
 
@@ -91,6 +104,181 @@ impl ResultGrid {
         self.deleted.clear();
         self.new_rows.clear();
         self.editing = None;
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+        self.selection_active = false;
+    }
+
+    /// Enter visual mode, anchoring the selection at the current cursor.
+    pub fn enter_visual_mode(&mut self) {
+        if self.result.is_some() {
+            self.selection_anchor = Some((self.cursor_row, self.cursor_col));
+            self.selection_active = true;
+        }
+    }
+
+    /// Exit visual mode and clear the selection highlight.
+    pub fn exit_visual_mode(&mut self) {
+        self.clear_selection();
+    }
+
+    /// Whether the cell at `(row, col)` lies inside the current selection rectangle.
+    pub fn is_cell_selected(&self, row: usize, col: usize) -> bool {
+        if !self.selection_active {
+            return false;
+        }
+        let Some((anchor_row, anchor_col)) = self.selection_anchor else {
+            return false;
+        };
+        let min_row = anchor_row.min(self.cursor_row);
+        let max_row = anchor_row.max(self.cursor_row);
+        let min_col = anchor_col.min(self.cursor_col);
+        let max_col = anchor_col.max(self.cursor_col);
+        row >= min_row && row <= max_row && col >= min_col && col <= max_col
+    }
+
+    /// Return the inclusive selection bounds `(min_row, min_col, max_row, max_col)`.
+    pub fn selected_range(&self) -> Option<(usize, usize, usize, usize)> {
+        if !self.selection_active {
+            return None;
+        }
+        let (anchor_row, anchor_col) = self.selection_anchor?;
+        let min_row = anchor_row.min(self.cursor_row);
+        let max_row = anchor_row.max(self.cursor_row);
+        let min_col = anchor_col.min(self.cursor_col);
+        let max_col = anchor_col.max(self.cursor_col);
+        Some((min_row, min_col, max_row, max_col))
+    }
+
+    /// Copy the selected range in the requested format.
+    pub fn copy(&self, format: CopyFormat) -> Result<String, String> {
+        match format {
+            CopyFormat::Csv => self.copy_as_csv(),
+            CopyFormat::Json => self.copy_as_json(),
+            CopyFormat::SqlInsert => self.copy_as_sql_insert(),
+        }
+    }
+
+    fn copy_as_csv(&self) -> Result<String, String> {
+        let Some((min_r, min_c, max_r, max_c)) = self.selected_range() else {
+            return Err("no selection".to_string());
+        };
+        let result = self.result.as_ref().ok_or("no result")?;
+        let mut wtr = csv::Writer::from_writer(Vec::new());
+
+        // Header row.
+        let mut header = Vec::new();
+        for c in min_c..=max_c {
+            if let Some(col) = result.columns.get(c) {
+                header.push(col.name.clone());
+            }
+        }
+        wtr.write_record(&header).map_err(|e| e.to_string())?;
+
+        // Data rows.
+        for r in min_r..=max_r {
+            let mut row = Vec::new();
+            for c in min_c..=max_c {
+                row.push(self.cell_display(r, c));
+            }
+            wtr.write_record(&row).map_err(|e| e.to_string())?;
+        }
+
+        wtr.into_inner()
+            .map(|v| String::from_utf8_lossy(&v).into_owned())
+            .map_err(|e| e.to_string())
+    }
+
+    fn copy_as_json(&self) -> Result<String, String> {
+        let Some((min_r, min_c, max_r, max_c)) = self.selected_range() else {
+            return Err("no selection".to_string());
+        };
+        let result = self.result.as_ref().ok_or("no result")?;
+
+        let mut rows = Vec::new();
+        for r in min_r..=max_r {
+            let mut obj = serde_json::Map::new();
+            for c in min_c..=max_c {
+                let col_name = result
+                    .columns
+                    .get(c)
+                    .map(|col| col.name.clone())
+                    .unwrap_or_else(|| format!("col_{c}"));
+                let value = self.json_value(r, c);
+                obj.insert(col_name, value);
+            }
+            rows.push(serde_json::Value::Object(obj));
+        }
+
+        serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())
+    }
+
+    fn json_value(&self, row: usize, col: usize) -> serde_json::Value {
+        let Some(result) = &self.result else {
+            return serde_json::Value::Null;
+        };
+        let existing = result.rows.len();
+        if row < existing {
+            if let Some(v) = self.edits.get(&(row, col)) {
+                return serde_json::Value::String(v.clone());
+            }
+            if let Some(cell) = result.rows.get(row).and_then(|r| r.get(col)) {
+                return match cell {
+                    CellValue::Null => serde_json::Value::Null,
+                    CellValue::Bool(b) => serde_json::Value::Bool(*b),
+                    CellValue::I64(v) => serde_json::Value::Number((*v).into()),
+                    CellValue::F64(v) => serde_json::Value::Number(
+                        serde_json::Number::from_f64(*v)
+                            .unwrap_or_else(|| serde_json::Number::from(0)),
+                    ),
+                    CellValue::String(s) => serde_json::Value::String(s.clone()),
+                    CellValue::Bytes(_) => serde_json::Value::String("<binary>".to_string()),
+                };
+            }
+        } else {
+            let ni = row - existing;
+            if let Some(Some(v)) = self.new_rows.get(ni).and_then(|r| r.get(col)) {
+                return serde_json::Value::String(v.clone());
+            }
+        }
+        serde_json::Value::Null
+    }
+
+    fn copy_as_sql_insert(&self) -> Result<String, String> {
+        let Some((min_r, min_c, max_r, max_c)) = self.selected_range() else {
+            return Err("no selection".to_string());
+        };
+        let result = self.result.as_ref().ok_or("no result")?;
+        let ctx = self
+            .edit_ctx
+            .as_ref()
+            .ok_or("SQL INSERT requires a browsed table")?;
+
+        let cols: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+        let mut stmts = Vec::new();
+        for r in min_r..=max_r {
+            let mut set_owned = Vec::new();
+            for c in min_c..=max_c {
+                if let Some(name) = cols.get(c) {
+                    set_owned.push((name.to_string(), self.cell_display(r, c)));
+                }
+            }
+            if !set_owned.is_empty() {
+                let set_refs: Vec<(&str, &str)> = set_owned
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+                    .collect();
+                stmts.push(sextant_db::build_insert(
+                    ctx.driver,
+                    &ctx.schema,
+                    &ctx.table,
+                    &set_refs,
+                ));
+            }
+        }
+        Ok(stmts.join(";\n"))
     }
 
     /// Return a reference to the current result, if any.
@@ -532,7 +720,7 @@ impl ResultGrid {
                 let is_edited = self.edits.contains_key(&(row_idx, col_idx));
                 let is_deleted = self.deleted.contains(&row_idx);
                 let is_new = row_idx >= existing;
-                let style = if is_active {
+                let base_style = if is_active {
                     Style::default().fg(p.background).bg(p.accent_alt)
                 } else if is_deleted {
                     Style::default()
@@ -546,6 +734,11 @@ impl ResultGrid {
                     Style::default().bg(p.muted)
                 } else {
                     Style::default().fg(p.foreground)
+                };
+                let style = if !is_active && self.is_cell_selected(row_idx, col_idx) {
+                    base_style.bg(p.selection_bg)
+                } else {
+                    base_style
                 };
                 frame.render_widget(
                     ratatui::widgets::Paragraph::new(text).style(style),
@@ -640,7 +833,6 @@ fn first_visible_column(
 
 /// Number of columns that fit in `area_width` starting from `offset`.
 ///
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1159,5 +1351,94 @@ mod tests {
             buf_before.content, buf_after.content,
             "narrowing column 2 should change the rendered buffer"
         );
+    }
+
+    #[test]
+    fn visual_mode_selects_single_cell() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.enter_visual_mode();
+        assert!(grid.is_cell_selected(0, 0));
+        assert!(!grid.is_cell_selected(0, 1));
+        assert!(!grid.is_cell_selected(1, 0));
+    }
+
+    #[test]
+    fn visual_mode_expands_rectangle() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.enter_visual_mode(); // anchor at (0, 0)
+        grid.move_down(); // cursor at (1, 0)
+        grid.move_right(); // cursor at (1, 1)
+        assert!(grid.is_cell_selected(0, 0));
+        assert!(grid.is_cell_selected(0, 1));
+        assert!(grid.is_cell_selected(1, 0));
+        assert!(grid.is_cell_selected(1, 1));
+        assert!(!grid.is_cell_selected(2, 0));
+    }
+
+    #[test]
+    fn visual_mode_reverse_selection() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.cursor_row = 1;
+        grid.cursor_col = 1;
+        grid.enter_visual_mode(); // anchor at (1, 1)
+        grid.move_up(); // cursor at (0, 1)
+        grid.move_left(); // cursor at (0, 0)
+        assert!(grid.is_cell_selected(0, 0));
+        assert!(grid.is_cell_selected(0, 1));
+        assert!(grid.is_cell_selected(1, 0));
+        assert!(grid.is_cell_selected(1, 1));
+    }
+
+    #[test]
+    fn copy_as_csv_basic() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.enter_visual_mode();
+        grid.move_down();
+        grid.move_right();
+        let csv = grid.copy(CopyFormat::Csv).unwrap();
+        assert!(csv.contains("id,name"));
+        assert!(csv.contains("1,Alice"));
+        assert!(csv.contains("2,Bob"));
+    }
+
+    #[test]
+    fn copy_as_json_basic() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.enter_visual_mode();
+        grid.move_down();
+        grid.move_right();
+        let json = grid.copy(CopyFormat::Json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["id"], 1);
+        assert_eq!(arr[0]["name"], "Alice");
+        assert_eq!(arr[1]["id"], 2);
+        assert_eq!(arr[1]["name"], "Bob");
+    }
+
+    #[test]
+    fn copy_as_sql_insert_basic() {
+        let mut grid = editable_grid();
+        grid.enter_visual_mode();
+        grid.move_down();
+        grid.move_right();
+        let sql = grid.copy(CopyFormat::SqlInsert).unwrap();
+        assert_eq!(
+            sql,
+            "INSERT INTO \"main\".\"users\" (\"id\", \"name\") VALUES ('1', 'Alice');\n\
+             INSERT INTO \"main\".\"users\" (\"id\", \"name\") VALUES ('2', 'Bob')"
+        );
+    }
+
+    #[test]
+    fn copy_without_selection_fails() {
+        let grid = ResultGrid::new();
+        assert!(grid.copy(CopyFormat::Csv).is_err());
     }
 }

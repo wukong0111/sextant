@@ -613,6 +613,21 @@ concreto vive en cada implementación.
 - *Then* se muestra un eco de la secuencia pendiente, sin menú
 - *And* al completar, abandonar o cancelar el chord, la realimentación desaparece
 
+**Selección rectangular de celdas del grid**
+- *Given* el foco está en el grid y hay resultados visibles
+- *When* se pulsa `v`
+- *Then* el modo pasa a Visual, la celda actual se convierte en el ancla, y el
+  status bar muestra `VIS`
+- *When* se mueve el cursor con `h/j/k/l`
+- *Then* el rango rectangular entre el ancla y el cursor se resalta en el grid
+- *When* se pulsa `<Ctrl-c>`
+- *Then* aparece un picker con opciones CSV, JSON, SQL INSERT
+- *When* se selecciona un formato y pulsa Enter
+- *Then* el contenido del rango seleccionado se copia al portapapeles en ese
+  formato y aparece una notificación transitoria
+- *When* se pulsa `Esc` o `v` en modo Visual
+- *Then* se abandona el modo Visual y el resaltado desaparece
+
 ---
 
 ## 18. Rationale de las decisiones de producto
