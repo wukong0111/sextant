@@ -964,8 +964,9 @@ impl ResultGrid {
                     };
                 if editing_here {
                     let edit = self.editing.as_ref().unwrap();
+                    let cursor_style = Style::default().fg(p.background).bg(p.foreground);
                     frame.render_widget(
-                        editing_paragraph(edit, style, render_width),
+                        editing_paragraph(edit, style, cursor_style, render_width),
                         Rect::new(x, row_y, render_width, 1),
                     );
                 } else {
@@ -996,13 +997,14 @@ impl ResultGrid {
 
 /// Render an in-progress cell edit as a one-line paragraph with a visible cursor.
 ///
-/// The character under the cursor is drawn with `Modifier::REVERSED`; when the
-/// cursor sits at the end of the buffer a reversed space acts as a block cursor.
-/// If the buffer is wider than `width`, the visible window is shifted so the
-/// cursor always stays in view.
+/// The character under the cursor is drawn with `cursor_style`; when the cursor
+/// sits at the end of the buffer `cursor_style` is applied to a trailing space
+/// so it shows as a block cursor. If the buffer is wider than `width`, the
+/// visible window is shifted so the cursor always stays in view.
 fn editing_paragraph(
     edit: &CellEdit,
     base_style: Style,
+    cursor_style: Style,
     width: u16,
 ) -> ratatui::widgets::Paragraph<'_> {
     let chars: Vec<char> = edit.buffer.chars().collect();
@@ -1033,10 +1035,7 @@ fn editing_paragraph(
             spans.push(Span::styled(before, base_style));
         }
         // Cursor character.
-        spans.push(Span::styled(
-            chars[cursor].to_string(),
-            base_style.add_modifier(Modifier::REVERSED),
-        ));
+        spans.push(Span::styled(chars[cursor].to_string(), cursor_style));
         // Text after the cursor character.
         if cursor + 1 < end {
             let after: String = chars[cursor + 1..end].iter().collect();
@@ -1048,10 +1047,7 @@ fn editing_paragraph(
             let visible: String = chars[start..chars.len()].iter().collect();
             spans.push(Span::styled(visible, base_style));
         }
-        spans.push(Span::styled(
-            " ",
-            base_style.add_modifier(Modifier::REVERSED),
-        ));
+        spans.push(Span::styled(" ", cursor_style));
     }
 
     ratatui::widgets::Paragraph::new(Line::from(spans))
@@ -1130,7 +1126,7 @@ fn first_visible_column(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+    use ratatui::{Terminal, backend::TestBackend, style::Color};
     use sextant_core::{CellValue, Column};
 
     fn sample_result() -> QueryResult {
@@ -2016,7 +2012,7 @@ mod tests {
     }
 
     #[test]
-    fn render_reverses_character_at_cursor() {
+    fn render_shows_high_contrast_cursor_at_character() {
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut grid = editable_grid();
@@ -2033,20 +2029,21 @@ mod tests {
             .unwrap();
 
         let buf = terminal.backend().buffer();
-        // Find a cell with the REVERSED modifier inside the rendered grid.
-        let reversed: Vec<_> = buf
+        // The cursor is drawn with the terminal's foreground as background
+        // so it is never the same color as the pane background.
+        let cursor_cells: Vec<_> = buf
             .content
             .iter()
-            .filter(|c| c.modifier.contains(Modifier::REVERSED))
+            .filter(|c| c.fg == Color::Black && c.bg == Color::White)
             .collect();
         assert!(
-            !reversed.is_empty(),
-            "expected at least one reversed cell for the cursor"
+            !cursor_cells.is_empty(),
+            "expected at least one high-contrast cursor cell"
         );
     }
 
     #[test]
-    fn render_shows_block_cursor_at_end() {
+    fn render_shows_high_contrast_block_cursor_at_end() {
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut grid = editable_grid();
@@ -2059,14 +2056,14 @@ mod tests {
             .unwrap();
 
         let buf = terminal.backend().buffer();
-        let reversed: Vec<_> = buf
+        let cursor_cells: Vec<_> = buf
             .content
             .iter()
-            .filter(|c| c.modifier.contains(Modifier::REVERSED))
+            .filter(|c| c.fg == Color::Black && c.bg == Color::White)
             .collect();
         assert!(
-            !reversed.is_empty(),
-            "expected a reversed block cursor at end of buffer"
+            !cursor_cells.is_empty(),
+            "expected a high-contrast block cursor at end of buffer"
         );
     }
 }

@@ -38,7 +38,7 @@ names on purpose; this mapping is per-implementation and lives here.
 | 21 | Selección de filas completas del grid | **UNIT** | widget `result_grid.rs`: `toggle_row_selection_adds_and_removes_row`, `clear_row_selection_clears_all`, `set_result_clears_row_selection`, `copy_selected_rows_as_csv`, `copy_selected_rows_as_tsv`, `copy_selected_rows_as_json`, `copy_selected_rows_as_sql_insert`, `copy_selected_rows_without_selection_fails`, `delete_selected_rows_marks_deleted`, `delete_selected_rows_requires_editability`, `row_selection_independent_from_visual_selection` |
 | 22 | Copia rápida de celda individual | **UNIT** | widget `result_grid.rs`: `copy_current_cell_returns_text`, `copy_current_cell_without_result_fails`, `copy_current_cell_honors_pending_edit` |
 | 23 | Entrada en edición de celda del grid | **APP** | `grid_i_enters_cell_edit_mode`, `grid_enter_does_not_enter_cell_edit_mode` |
-| 24 | Cursor visible en edición de celda del grid | **UNIT** | `result_grid.rs`: `cursor_starts_at_end`, `cursor_moves_with_arrow_keys`, `typing_inserts_at_cursor`, `backspace_deletes_before_cursor`, `cursor_clamps_to_bounds`, `render_reverses_cursor_char`, `render_shows_block_cursor_at_end` |
+| 24 | Cursor visible en edición de celda del grid | **UNIT** | `result_grid.rs`: `cursor_starts_at_end`, `cursor_moves_with_arrow_keys`, `typing_inserts_at_cursor`, `backspace_deletes_before_cursor`, `cursor_clamps_to_bounds`, `render_shows_high_contrast_cursor_at_character`, `render_shows_high_contrast_block_cursor_at_end` |
 
 ## Resumen
 

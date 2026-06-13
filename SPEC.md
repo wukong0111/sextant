@@ -668,8 +668,9 @@ concreto vive en cada implementación.
 - *When* se escriben caracteres o se pulsa `Backspace`
 - *Then* el texto se inserta o borra en la posición del cursor
 - *And* el cursor se mueve con `Left`, `Right`, `Home` y `End`
-- *And* el carácter bajo el cursor se muestra con estilo invertido (o un bloque invertido al
-  final del texto), de modo que siempre es visible dónde se insertará el siguiente carácter
+- *And* el carácter bajo el cursor se resalta con un estilo de alto contraste (por ejemplo,
+  colores invertidos o un bloque claro/oscuro al final del texto), de modo que siempre es visible
+  dónde se insertará el siguiente carácter
 
 ---
 
