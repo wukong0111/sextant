@@ -21,8 +21,7 @@ Agent-facing reference for the `sextant` project. Read this first before making 
 | `docs/coverage.md` | Binding from `SPEC.md` §17 criteria to concrete tests, plus the catalog of manual/visual-only checks. |
 | `docs/documentation-guide.md` | Which doc a change must touch, the litmus, and ordering rules. |
 
-> **Note:** `CLAUDE.md` is a symlink to this file (`AGENTS.md`) — editing either edits both.
-> Project workflows are slash-command skills in `.claude/skills/`:
+> Project workflows are slash-command skills in `.agents/skills/`:
 > `db-setup`, `connect-tui`, `workspace-check`, `plan-task`.
 
 ---
