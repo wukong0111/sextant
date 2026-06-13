@@ -83,6 +83,8 @@ Full requirements in **`SPEC.md` §16**. Do not regress these:
 
 **Any feature, bug fix, or refactor that changes observable behavior must follow this loop.** Do not write code until the spec and tests are in place.
 
+> **Self-enforcement:** These steps must be triggered proactively by the agent. Do not wait for the user to ask for `plan-task` or `done-checklist`; run them automatically whenever the task changes observable behavior.
+
 - **Before starting:** run the **`plan-task`** skill. It forces reading `SPEC.md`/`plan.md` first, confirming scope, and writing the §17 criterion.
 - **Before declaring done:** run the **`done-checklist`** skill. It verifies tests, docs, and `make check` were completed in the right order.
 
