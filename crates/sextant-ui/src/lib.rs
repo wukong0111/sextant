@@ -969,10 +969,26 @@ impl App {
                 }
             }
             Action::Copy => {
-                // In Normal mode, copy only fires when full rows are selected.
-                // Visual-mode copy is handled directly in the Visual key capture.
-                if self.focus == Focus::Grid && self.result_grid.has_row_selection() {
+                if self.focus != Focus::Grid {
+                    return;
+                }
+                if self.result_grid.has_row_selection() {
+                    // Full-row selection: choose a format before copying.
                     self.open_copy_format_picker();
+                } else {
+                    // No selection: copy the current cell as plain text.
+                    match self.result_grid.copy_current_cell() {
+                        Ok(text) => {
+                            if let Err(e) = set_clipboard(&text) {
+                                self.last_error = Some(format!("clipboard error: {e}"));
+                            } else {
+                                self.last_notice = Some("Copied cell".to_string());
+                            }
+                        }
+                        Err(e) => {
+                            self.last_error = Some(e);
+                        }
+                    }
                 }
             }
             Action::ToggleRowSelection => {

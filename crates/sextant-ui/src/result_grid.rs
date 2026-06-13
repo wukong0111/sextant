@@ -222,6 +222,15 @@ impl ResultGrid {
         }
     }
 
+    /// Copy the plain text of the cell currently under the cursor.
+    pub fn copy_current_cell(&self) -> Result<String, String> {
+        let result = self.result.as_ref().ok_or("no result")?;
+        if self.cursor_row >= self.total_rows() || self.cursor_col >= result.columns.len() {
+            return Err("cursor out of bounds".to_string());
+        }
+        Ok(self.cell_display(self.cursor_row, self.cursor_col))
+    }
+
     fn copy_selected_rows_delimited(&self, delimiter: u8) -> Result<String, String> {
         let result = self.result.as_ref().ok_or("no result")?;
         let mut wtr = csv::WriterBuilder::new()
@@ -1725,5 +1734,29 @@ mod tests {
         grid.exit_visual_mode();
         assert!(grid.is_row_selected(0));
         assert!(!grid.is_cell_selected(0, 1));
+    }
+
+    #[test]
+    fn copy_current_cell_returns_text() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.cursor_row = 1;
+        grid.cursor_col = 1;
+        assert_eq!(grid.copy_current_cell().unwrap(), "Bob");
+    }
+
+    #[test]
+    fn copy_current_cell_without_result_fails() {
+        let grid = ResultGrid::new();
+        assert!(grid.copy_current_cell().is_err());
+    }
+
+    #[test]
+    fn copy_current_cell_honors_pending_edit() {
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+        type_into_cell(&mut grid, "Alicia");
+        assert_eq!(grid.copy_current_cell().unwrap(), "Alicia");
     }
 }

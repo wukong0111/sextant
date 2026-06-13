@@ -126,7 +126,7 @@ impl Action {
             Action::AutoFitColumn => "auto-fit current column",
             Action::AutoFitAll => "auto-fit all columns",
             Action::EnterVisualMode => "enter visual mode (grid selection)",
-            Action::Copy => "copy selection or selected rows",
+            Action::Copy => "copy cell or selection",
             Action::ToggleRowSelection => "toggle row selection (grid)",
         }
     }

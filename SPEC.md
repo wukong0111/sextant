@@ -647,6 +647,13 @@ concreto vive en cada implementación.
 - *When* se pulsa `d` teniendo filas seleccionadas en un grid editable
 - *Then* todas las filas seleccionadas se marcan para borrado
 
+**Copia rápida de celda individual**
+- *Given* el foco está en el grid, hay resultados visibles, no hay modo Visual activo y no hay
+  filas seleccionadas
+- *When* se pulsa `y` sobre una celda
+- *Then* el contenido de esa celda se copia al portapapeles como texto plano, sin formato
+  especial, y aparece una notificación transitoria
+
 ---
 
 ## 18. Rationale de las decisiones de producto
