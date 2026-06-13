@@ -413,17 +413,20 @@ La app ofrece varios selectores con **filtrado difuso (fuzzy)**:
 
 ### 14.1 Export
 
-La acción *Export* ofrece tres formatos: **CSV**, **JSON** y **SQL (INSERT)**.
+La acción *Export* ofrece cuatro formatos: **CSV**, **TSV**, **JSON** y **SQL (INSERT)**.
 El resultado se escribe a un fichero en el directorio de exports. Contratos de
 serialización de `CellValue`:
 
 | Formato | Null | Bytes | Booleano |
 |---------|------|-------|----------|
 | CSV | celda vacía | hex | `true`/`false` |
+| TSV | celda vacía | hex | `true`/`false` |
 | JSON | `null` | string hex | booleano JSON |
 | SQL | `NULL` | hex | `TRUE`/`FALSE` |
 
 JSON es un array de objetos por fila; SQL es una sentencia `INSERT` por fila.
+CSV y TSV difieren solo en el delimitador (coma vs. tabulación); ambos incluyen
+una fila de cabecera.
 
 ### 14.2 Import
 
@@ -563,7 +566,7 @@ concreto vive en cada implementación.
 
 **Export**
 - *Given* un resultado en el grid
-- *When* se ejecuta Export y se elige un formato (CSV/JSON/SQL)
+- *When* se ejecuta Export y se elige un formato (CSV/TSV/JSON/SQL)
 - *Then* se escribe un fichero con los datos, respetando las reglas de
   serialización de la §14.1
 
@@ -621,7 +624,7 @@ concreto vive en cada implementación.
 - *When* se mueve el cursor con `h/j/k/l`
 - *Then* el rango rectangular entre el ancla y el cursor se resalta en el grid
 - *When* se pulsa `<Ctrl-c>`
-- *Then* aparece un picker con opciones CSV, JSON, SQL INSERT
+- *Then* aparece un picker con opciones CSV, TSV, JSON, SQL INSERT
 - *When* se selecciona un formato y pulsa Enter
 - *Then* el contenido del rango seleccionado se copia al portapapeles en ese
   formato y aparece una notificación transitoria

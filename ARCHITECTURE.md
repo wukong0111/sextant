@@ -76,7 +76,7 @@ The service crates (`db`, `config`, `state`) must compile and be testable
 | Swap files (crash recovery) | `crates/sextant-ui/src/swap.rs` |
 | SQL execution, transaction state + row→`CellValue` mapping per backend | `crates/sextant-db/src/executor.rs` |
 | SQL generation: quoting, `CREATE TABLE` skeleton, DML by PK, destructive-op detection | `crates/sextant-db/src/sql.rs` |
-| Export serialization (CSV/JSON/SQL) · import parsing + column mapping | `crates/sextant-db/src/{export,import}.rs` |
+| Export serialization (CSV/TSV/JSON/SQL) · import parsing + column mapping | `crates/sextant-db/src/{export,import}.rs` |
 | Connection pools per active connection | `crates/sextant-db/src/connection_manager.rs` |
 | Schema/table introspection | `crates/sextant-db/src/introspection.rs` |
 | Connection-URL construction per driver | `crates/sextant-db/src/url_builder.rs` |

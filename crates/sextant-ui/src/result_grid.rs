@@ -18,6 +18,7 @@ use crate::palette::Palette;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyFormat {
     Csv,
+    Tsv,
     Json,
     SqlInsert,
 }
@@ -156,17 +157,28 @@ impl ResultGrid {
     pub fn copy(&self, format: CopyFormat) -> Result<String, String> {
         match format {
             CopyFormat::Csv => self.copy_as_csv(),
+            CopyFormat::Tsv => self.copy_as_tsv(),
             CopyFormat::Json => self.copy_as_json(),
             CopyFormat::SqlInsert => self.copy_as_sql_insert(),
         }
     }
 
     fn copy_as_csv(&self) -> Result<String, String> {
+        self.copy_delimited(b',')
+    }
+
+    fn copy_as_tsv(&self) -> Result<String, String> {
+        self.copy_delimited(b'\t')
+    }
+
+    fn copy_delimited(&self, delimiter: u8) -> Result<String, String> {
         let Some((min_r, min_c, max_r, max_c)) = self.selected_range() else {
             return Err("no selection".to_string());
         };
         let result = self.result.as_ref().ok_or("no result")?;
-        let mut wtr = csv::Writer::from_writer(Vec::new());
+        let mut wtr = csv::WriterBuilder::new()
+            .delimiter(delimiter)
+            .from_writer(Vec::new());
 
         // Header row.
         let mut header = Vec::new();
@@ -1403,6 +1415,17 @@ mod tests {
         assert!(csv.contains("id,name"));
         assert!(csv.contains("1,Alice"));
         assert!(csv.contains("2,Bob"));
+    }
+
+    #[test]
+    fn copy_as_tsv_basic() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.enter_visual_mode();
+        grid.move_down();
+        grid.move_right();
+        let tsv = grid.copy(CopyFormat::Tsv).unwrap();
+        assert_eq!(tsv, "id\tname\n1\tAlice\n2\tBob\n");
     }
 
     #[test]

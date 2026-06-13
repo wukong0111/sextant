@@ -1850,6 +1850,7 @@ impl App {
         }
         let items = [
             sextant_db::ExportFormat::Csv,
+            sextant_db::ExportFormat::Tsv,
             sextant_db::ExportFormat::Json,
             sextant_db::ExportFormat::Sql,
         ]
@@ -2100,6 +2101,10 @@ impl App {
                 action: PickerAction::CopyFormat(CopyFormat::Csv),
             },
             PickerItem {
+                label: "TSV".to_string(),
+                action: PickerAction::CopyFormat(CopyFormat::Tsv),
+            },
+            PickerItem {
                 label: "JSON".to_string(),
                 action: PickerAction::CopyFormat(CopyFormat::Json),
             },
@@ -2157,6 +2162,7 @@ impl App {
                         "Copied {rows} row(s) as {}",
                         match format {
                             CopyFormat::Csv => "CSV",
+                            CopyFormat::Tsv => "TSV",
                             CopyFormat::Json => "JSON",
                             CopyFormat::SqlInsert => "SQL INSERT",
                         }

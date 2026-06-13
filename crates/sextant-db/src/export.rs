@@ -13,6 +13,8 @@ use crate::sql::quote_ident;
 pub enum ExportFormat {
     /// RFC 4180 comma-separated values, with a header row.
     Csv,
+    /// Tab-separated values, with a header row.
+    Tsv,
     /// A JSON array of objects keyed by column name.
     Json,
     /// One `INSERT INTO <table> (...) VALUES (...);` per row.
@@ -24,6 +26,7 @@ impl ExportFormat {
     pub fn extension(self) -> &'static str {
         match self {
             ExportFormat::Csv => "csv",
+            ExportFormat::Tsv => "tsv",
             ExportFormat::Json => "json",
             ExportFormat::Sql => "sql",
         }
@@ -33,6 +36,7 @@ impl ExportFormat {
     pub fn label(self) -> &'static str {
         match self {
             ExportFormat::Csv => "CSV",
+            ExportFormat::Tsv => "TSV",
             ExportFormat::Json => "JSON",
             ExportFormat::Sql => "SQL (INSERT)",
         }
@@ -46,6 +50,7 @@ impl ExportFormat {
 pub fn export(result: &QueryResult, format: ExportFormat, driver: Driver, table: &str) -> String {
     match format {
         ExportFormat::Csv => to_csv(result),
+        ExportFormat::Tsv => to_tsv(result),
         ExportFormat::Json => to_json(result),
         ExportFormat::Sql => to_sql(result, driver, table),
     }
@@ -56,7 +61,20 @@ pub fn export(result: &QueryResult, format: ExportFormat, driver: Driver, table:
 /// `NULL` cells become empty fields (the CSV convention); binary cells are
 /// hex-encoded so the output stays valid UTF-8.
 pub fn to_csv(result: &QueryResult) -> String {
-    let mut wtr = csv::Writer::from_writer(Vec::new());
+    write_delimited(result, b',')
+}
+
+/// Render `result` as TSV with a header row.
+///
+/// Uses the same escaping rules as CSV (RFC 4180), but with tab as delimiter.
+pub fn to_tsv(result: &QueryResult) -> String {
+    write_delimited(result, b'\t')
+}
+
+fn write_delimited(result: &QueryResult, delimiter: u8) -> String {
+    let mut wtr = csv::WriterBuilder::new()
+        .delimiter(delimiter)
+        .from_writer(Vec::new());
     let _ = wtr.write_record(result.columns.iter().map(|c| c.name.as_str()));
     for row in &result.rows {
         let _ = wtr.write_record(row.iter().map(csv_cell));
@@ -197,6 +215,25 @@ mod tests {
             rows_affected: None,
         };
         assert_eq!(to_csv(&result), "v\n\"a,b\"\n");
+    }
+
+    #[test]
+    fn tsv_has_header_and_tab_delimited_null() {
+        let tsv = to_tsv(&sample());
+        assert_eq!(tsv, "id\tname\n1\tAlice\n2\t\n");
+    }
+
+    #[test]
+    fn tsv_quotes_fields_with_tabs() {
+        let result = QueryResult {
+            columns: vec![Column {
+                name: "v".into(),
+                type_name: "text".into(),
+            }],
+            rows: vec![vec![CellValue::String("a\tb".into())]],
+            rows_affected: None,
+        };
+        assert_eq!(to_tsv(&result), "v\n\"a\tb\"\n");
     }
 
     #[test]
