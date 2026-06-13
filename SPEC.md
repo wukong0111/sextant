@@ -230,9 +230,9 @@ sea más ancha que la pantalla.
 
 ### 7.4 Edición (cuando es editable)
 
-- *Activate* sobre una celda entra en edición (modo Insert); confirmar fija el
-  cambio como **pendiente**, cancelar lo descarta. Las celdas modificadas se
-  resaltan.
+- *EditCell* (`i` por defecto) sobre una celda entra en edición (modo Insert);
+  confirmar fija el cambio como **pendiente**, cancelar lo descarta. Las celdas
+  modificadas se resaltan.
 - *AddRow* añade una fila vacía al final (resaltada como nueva).
 - *DeleteRow* marca/desmarca una fila para borrado (resaltada como tachada).
 - *Discard* (`Ctrl+Z`) descarta todos los cambios pendientes.
@@ -357,7 +357,8 @@ sobre el grid según el foco. El keymap es **remapeable** por el usuario:
 | Import | `Espacio i` | importar a tabla |
 | Down / Up / Left / Right | `j` / `k` / `h` / `l` | mover (árbol o grid) |
 | Top / Bottom | `gg` / `G` | ir al principio / final |
-| Activate | `Enter` | conectar / browse / editar celda |
+| Activate | `Enter` | conectar / browse (árbol) |
+| EditCell | `i` | editar celda (grid) |
 | AddRow | `o` | añadir fila (grid) |
 | DeleteRow | `dd` | marcar borrado (grid) |
 | Commit | `Ctrl+S` | confirmar edits (grid) |
@@ -528,6 +529,14 @@ concreto vive en cada implementación.
   las columnas siguientes o mostrando su contenido truncado
 - *And* AutoFitColumn restaura el ancho de la columna seleccionada al auto-fit
 - *And* AutoFitAll restaura todos los anchos sobrescritos
+
+**Entrada en edición de celda del grid**
+- *Given* el foco está en un grid editable con celdas visibles
+- *When* se pulsa `i` sobre una celda
+- *Then* el modo pasa a Insert, la celda actual entra en edición y su contenido
+  aparece en la línea de estado
+- *When* se pulsa `Enter` sobre una celda
+- *Then* no entra en edición (sigue en modo Normal)
 
 **Edición del grid con concurrencia optimista**
 - *Given* una tabla **con clave primaria** abierta en el grid

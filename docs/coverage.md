@@ -37,12 +37,13 @@ names on purpose; this mapping is per-implementation and lives here.
 | 20 | Selección rectangular de celdas del grid | **UNIT** | widget `result_grid.rs`: `visual_mode_selects_single_cell`, `visual_mode_expands_rectangle`, `visual_mode_reverse_selection`, `copy_as_csv_basic`, `copy_as_tsv_basic`, `copy_as_json_basic`, `copy_as_sql_insert_basic`, `copy_without_selection_fails` |
 | 21 | Selección de filas completas del grid | **UNIT** | widget `result_grid.rs`: `toggle_row_selection_adds_and_removes_row`, `clear_row_selection_clears_all`, `set_result_clears_row_selection`, `copy_selected_rows_as_csv`, `copy_selected_rows_as_tsv`, `copy_selected_rows_as_json`, `copy_selected_rows_as_sql_insert`, `copy_selected_rows_without_selection_fails`, `delete_selected_rows_marks_deleted`, `delete_selected_rows_requires_editability`, `row_selection_independent_from_visual_selection` |
 | 22 | Copia rápida de celda individual | **UNIT** | widget `result_grid.rs`: `copy_current_cell_returns_text`, `copy_current_cell_without_result_fails`, `copy_current_cell_honors_pending_edit` |
+| 23 | Entrada en edición de celda del grid | **APP** | `grid_i_enters_cell_edit_mode`, `grid_enter_does_not_enter_cell_edit_mode` |
 
 ## Resumen
 
 - **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15, 17, 19**.
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
-  **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22**.
+  **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22, 23**.
 - **Huecos reales**: ninguno pendiente.
 
 ## Qué NO pueden cubrir los tests (verificación manual recurrente)

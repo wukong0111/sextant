@@ -551,7 +551,7 @@ impl App {
                 " <Esc> normal "
             }
         } else if self.focus == Focus::Grid && self.result_grid.is_editable() {
-            " <Enter> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
+            " <i> edit │ o add │ dd del │ <C-s> commit │ <C-z> discard "
         } else {
             " <Space>e editor │ <Space>h history │ <Space>r recent │ <Space>x export │ <Space>i import "
         };
@@ -898,15 +898,19 @@ impl App {
                     self.result_grid.bottom();
                 }
             }
-            Action::Activate => match self.focus {
-                Focus::Tree => self.handle_enter(tx),
-                Focus::Grid => {
+            Action::Activate => {
+                if self.focus == Focus::Tree {
+                    self.handle_enter(tx);
+                }
+            }
+            Action::EditCell => {
+                if self.focus == Focus::Grid {
                     self.result_grid.begin_edit();
                     if self.result_grid.is_editing() {
                         self.mode = Mode::Insert;
                     }
                 }
-            },
+            }
             Action::AddRow => {
                 if self.focus == Focus::Grid {
                     self.result_grid.add_row();
@@ -3767,6 +3771,58 @@ mod tests {
         assert!(
             text.contains("<Space>? help"),
             "help hint must stay visible even when the grid is focused: {text}"
+        );
+    }
+
+    fn editable_grid_app() -> App {
+        let mut app = test_app();
+        app.focus = Focus::Grid;
+        app.result_grid.set_result(Some(sextant_core::QueryResult {
+            columns: vec![sextant_core::Column {
+                name: "id".into(),
+                type_name: "int".into(),
+            }],
+            rows: vec![vec![sextant_core::CellValue::I64(1)]],
+            rows_affected: None,
+        }));
+        app.result_grid
+            .set_edit_context(Some(result_grid::EditContext {
+                driver: sextant_core::Driver::Sqlite,
+                schema: "main".into(),
+                table: "users".into(),
+                pk_columns: vec!["id".into()],
+            }));
+        assert!(app.result_grid.is_editable());
+        app
+    }
+
+    #[test]
+    fn grid_i_enters_cell_edit_mode() {
+        let mut app = editable_grid_app();
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.result_grid.is_editing());
+
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('i'))));
+
+        assert_eq!(app.mode, Mode::Insert, "i should switch to Insert mode");
+        assert!(
+            app.result_grid.is_editing(),
+            "i should start editing the current cell"
+        );
+    }
+
+    #[test]
+    fn grid_enter_does_not_enter_cell_edit_mode() {
+        let mut app = editable_grid_app();
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.result_grid.is_editing());
+
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Enter)));
+
+        assert_eq!(app.mode, Mode::Normal, "Enter should stay in Normal mode");
+        assert!(
+            !app.result_grid.is_editing(),
+            "Enter should not start editing the cell"
         );
     }
 
