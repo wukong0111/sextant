@@ -834,6 +834,15 @@ impl App {
             return;
         }
 
+        // Esc clears any full-row selection before falling through to the keymap.
+        if key.code == KeyCode::Esc
+            && self.focus == Focus::Grid
+            && self.result_grid.has_row_selection()
+        {
+            self.result_grid.clear_row_selection();
+            return;
+        }
+
         // Resolve the key through the remappable keymap; a completed chord
         // yields an Action dispatched against the current focus.
         let spec = KeySpec::from_event(key);
@@ -905,7 +914,11 @@ impl App {
             }
             Action::DeleteRow => {
                 if self.focus == Focus::Grid {
-                    self.result_grid.mark_delete();
+                    if self.result_grid.has_row_selection() {
+                        self.result_grid.delete_selected_rows();
+                    } else {
+                        self.result_grid.mark_delete();
+                    }
                 }
             }
             Action::Commit => {
@@ -958,6 +971,17 @@ impl App {
             Action::CopySelection => {
                 // CopySelection is handled directly in visual mode key capture;
                 // in normal mode it is a no-op.
+            }
+            Action::ToggleRowSelection => {
+                if self.focus == Focus::Grid {
+                    let row = self.result_grid.cursor_row();
+                    self.result_grid.toggle_row_selection(row);
+                }
+            }
+            Action::CopySelectedRows => {
+                if self.focus == Focus::Grid && self.result_grid.has_row_selection() {
+                    self.open_copy_format_picker();
+                }
             }
         }
     }
@@ -2148,16 +2172,25 @@ impl App {
             return;
         };
 
-        match self.result_grid.copy(format) {
+        let copy_result = if self.result_grid.has_row_selection() {
+            self.result_grid.copy_selected_rows(format)
+        } else {
+            self.result_grid.copy(format)
+        };
+
+        match copy_result {
             Ok(text) => {
                 if let Err(e) = set_clipboard(&text) {
                     self.last_error = Some(format!("clipboard error: {e}"));
                 } else {
-                    let rows = self
-                        .result_grid
-                        .selected_range()
-                        .map(|(min_r, _, max_r, _)| max_r - min_r + 1)
-                        .unwrap_or(0);
+                    let rows = if self.result_grid.has_row_selection() {
+                        self.result_grid.selected_row_count()
+                    } else {
+                        self.result_grid
+                            .selected_range()
+                            .map(|(min_r, _, max_r, _)| max_r - min_r + 1)
+                            .unwrap_or(0)
+                    };
                     self.last_notice = Some(format!(
                         "Copied {rows} row(s) as {}",
                         match format {

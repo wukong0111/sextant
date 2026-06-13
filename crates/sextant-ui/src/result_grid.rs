@@ -67,6 +67,8 @@ pub struct ResultGrid {
     selection_anchor: Option<(usize, usize)>,
     /// Whether a visual selection is currently active.
     selection_active: bool,
+    /// Rows selected for full-row operations (toggle with `x`).
+    selected_rows: BTreeSet<usize>,
 }
 
 impl ResultGrid {
@@ -90,6 +92,7 @@ impl ResultGrid {
         self.cursor_col = 0;
         self.clear_pending();
         self.clear_selection();
+        self.selected_rows.clear();
         self.column_widths.clear();
     }
 
@@ -153,6 +156,49 @@ impl ResultGrid {
         Some((min_row, min_col, max_row, max_col))
     }
 
+    /// Toggle selection of the given full row.
+    pub fn toggle_row_selection(&mut self, row: usize) {
+        if row >= self.total_rows() {
+            return;
+        }
+        if !self.selected_rows.insert(row) {
+            self.selected_rows.remove(&row);
+        }
+    }
+
+    /// Clear all full-row selections.
+    pub fn clear_row_selection(&mut self) {
+        self.selected_rows.clear();
+    }
+
+    /// Whether the given row is selected as a full row.
+    pub fn is_row_selected(&self, row: usize) -> bool {
+        self.selected_rows.contains(&row)
+    }
+
+    /// Whether any full rows are currently selected.
+    pub fn has_row_selection(&self) -> bool {
+        !self.selected_rows.is_empty()
+    }
+
+    /// Number of full rows currently selected.
+    pub fn selected_row_count(&self) -> usize {
+        self.selected_rows.len()
+    }
+
+    /// Mark all selected full rows as deleted and clear the selection.
+    pub fn delete_selected_rows(&mut self) {
+        if !self.is_editable() || self.selected_rows.is_empty() {
+            return;
+        }
+        for &row in &self.selected_rows {
+            if row < self.existing_rows() {
+                self.deleted.insert(row);
+            }
+        }
+        self.selected_rows.clear();
+    }
+
     /// Copy the selected range in the requested format.
     pub fn copy(&self, format: CopyFormat) -> Result<String, String> {
         match format {
@@ -161,6 +207,83 @@ impl ResultGrid {
             CopyFormat::Json => self.copy_as_json(),
             CopyFormat::SqlInsert => self.copy_as_sql_insert(),
         }
+    }
+
+    /// Copy the selected full rows in the requested format.
+    pub fn copy_selected_rows(&self, format: CopyFormat) -> Result<String, String> {
+        if self.selected_rows.is_empty() {
+            return Err("no rows selected".to_string());
+        }
+        match format {
+            CopyFormat::Csv => self.copy_selected_rows_delimited(b','),
+            CopyFormat::Tsv => self.copy_selected_rows_delimited(b'\t'),
+            CopyFormat::Json => self.copy_selected_rows_json(),
+            CopyFormat::SqlInsert => self.copy_selected_rows_sql_insert(),
+        }
+    }
+
+    fn copy_selected_rows_delimited(&self, delimiter: u8) -> Result<String, String> {
+        let result = self.result.as_ref().ok_or("no result")?;
+        let mut wtr = csv::WriterBuilder::new()
+            .delimiter(delimiter)
+            .from_writer(Vec::new());
+
+        let header: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+        wtr.write_record(&header).map_err(|e| e.to_string())?;
+
+        for &row in &self.selected_rows {
+            let mut record = Vec::new();
+            for col in 0..result.columns.len() {
+                record.push(self.cell_display(row, col));
+            }
+            wtr.write_record(&record).map_err(|e| e.to_string())?;
+        }
+
+        wtr.into_inner()
+            .map(|v| String::from_utf8_lossy(&v).into_owned())
+            .map_err(|e| e.to_string())
+    }
+
+    fn copy_selected_rows_json(&self) -> Result<String, String> {
+        let result = self.result.as_ref().ok_or("no result")?;
+        let mut rows = Vec::new();
+        for &row in &self.selected_rows {
+            let mut obj = serde_json::Map::new();
+            for (col, col_meta) in result.columns.iter().enumerate() {
+                obj.insert(col_meta.name.clone(), self.json_value(row, col));
+            }
+            rows.push(serde_json::Value::Object(obj));
+        }
+        serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())
+    }
+
+    fn copy_selected_rows_sql_insert(&self) -> Result<String, String> {
+        let result = self.result.as_ref().ok_or("no result")?;
+        let ctx = self
+            .edit_ctx
+            .as_ref()
+            .ok_or("SQL INSERT requires a browsed table")?;
+
+        let cols: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+        let mut stmts = Vec::new();
+        for &row in &self.selected_rows {
+            let set_owned: Vec<(String, String)> = cols
+                .iter()
+                .enumerate()
+                .map(|(col, name)| (name.to_string(), self.cell_display(row, col)))
+                .collect();
+            let set_refs: Vec<(&str, &str)> = set_owned
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+                .collect();
+            stmts.push(sextant_db::build_insert(
+                ctx.driver,
+                &ctx.schema,
+                &ctx.table,
+                &set_refs,
+            ));
+        }
+        Ok(stmts.join(";\n"))
     }
 
     fn copy_as_csv(&self) -> Result<String, String> {
@@ -732,6 +855,7 @@ impl ResultGrid {
                 let is_edited = self.edits.contains_key(&(row_idx, col_idx));
                 let is_deleted = self.deleted.contains(&row_idx);
                 let is_new = row_idx >= existing;
+                let is_row_selected = self.is_row_selected(row_idx);
                 let base_style = if is_active {
                     Style::default().fg(p.background).bg(p.accent_alt)
                 } else if is_deleted {
@@ -742,16 +866,19 @@ impl ResultGrid {
                     Style::default().fg(p.success)
                 } else if is_edited {
                     Style::default().fg(p.accent_alt)
+                } else if is_row_selected {
+                    Style::default().fg(p.selection_fg).bg(p.selection_bg)
                 } else if row_idx == self.cursor_row {
                     Style::default().bg(p.muted)
                 } else {
                     Style::default().fg(p.foreground)
                 };
-                let style = if !is_active && self.is_cell_selected(row_idx, col_idx) {
-                    base_style.bg(p.selection_bg)
-                } else {
-                    base_style
-                };
+                let style =
+                    if !is_active && !is_row_selected && self.is_cell_selected(row_idx, col_idx) {
+                        base_style.bg(p.selection_bg)
+                    } else {
+                        base_style
+                    };
                 frame.render_widget(
                     ratatui::widgets::Paragraph::new(text).style(style),
                     Rect::new(x, row_y, render_width, 1),
@@ -1463,5 +1590,140 @@ mod tests {
     fn copy_without_selection_fails() {
         let grid = ResultGrid::new();
         assert!(grid.copy(CopyFormat::Csv).is_err());
+    }
+
+    #[test]
+    fn toggle_row_selection_adds_and_removes_row() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+
+        grid.toggle_row_selection(0);
+        assert!(grid.is_row_selected(0));
+        assert!(!grid.is_row_selected(1));
+        assert_eq!(grid.selected_row_count(), 1);
+
+        grid.toggle_row_selection(1);
+        assert!(grid.is_row_selected(0));
+        assert!(grid.is_row_selected(1));
+        assert_eq!(grid.selected_row_count(), 2);
+
+        grid.toggle_row_selection(0);
+        assert!(!grid.is_row_selected(0));
+        assert!(grid.is_row_selected(1));
+        assert_eq!(grid.selected_row_count(), 1);
+    }
+
+    #[test]
+    fn toggle_row_selection_out_of_bounds_is_noop() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.toggle_row_selection(99);
+        assert!(!grid.has_row_selection());
+    }
+
+    #[test]
+    fn clear_row_selection_clears_all() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.toggle_row_selection(0);
+        grid.toggle_row_selection(1);
+        grid.clear_row_selection();
+        assert!(!grid.has_row_selection());
+    }
+
+    #[test]
+    fn set_result_clears_row_selection() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.toggle_row_selection(0);
+        grid.set_result(Some(sample_result()));
+        assert!(!grid.has_row_selection());
+    }
+
+    #[test]
+    fn copy_selected_rows_as_csv() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.toggle_row_selection(1);
+        let csv = grid.copy_selected_rows(CopyFormat::Csv).unwrap();
+        assert!(csv.contains("id,name"));
+        assert!(!csv.contains("1,Alice"));
+        assert!(csv.contains("2,Bob"));
+    }
+
+    #[test]
+    fn copy_selected_rows_as_tsv() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.toggle_row_selection(0);
+        let tsv = grid.copy_selected_rows(CopyFormat::Tsv).unwrap();
+        assert_eq!(tsv, "id\tname\n1\tAlice\n");
+    }
+
+    #[test]
+    fn copy_selected_rows_as_json() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.toggle_row_selection(1);
+        let json = grid.copy_selected_rows(CopyFormat::Json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], 2);
+        assert_eq!(arr[0]["name"], "Bob");
+    }
+
+    #[test]
+    fn copy_selected_rows_as_sql_insert() {
+        let mut grid = editable_grid();
+        grid.toggle_row_selection(0);
+        grid.toggle_row_selection(1);
+        let sql = grid.copy_selected_rows(CopyFormat::SqlInsert).unwrap();
+        assert_eq!(
+            sql,
+            "INSERT INTO \"main\".\"users\" (\"id\", \"name\") VALUES ('1', 'Alice');\n\
+             INSERT INTO \"main\".\"users\" (\"id\", \"name\") VALUES ('2', 'Bob')"
+        );
+    }
+
+    #[test]
+    fn copy_selected_rows_without_selection_fails() {
+        let grid = ResultGrid::new();
+        assert!(grid.copy_selected_rows(CopyFormat::Csv).is_err());
+    }
+
+    #[test]
+    fn delete_selected_rows_marks_deleted() {
+        let mut grid = editable_grid();
+        grid.toggle_row_selection(0);
+        grid.toggle_row_selection(1);
+        grid.delete_selected_rows();
+        assert!(grid.deleted.contains(&0));
+        assert!(grid.deleted.contains(&1));
+        assert!(!grid.has_row_selection());
+    }
+
+    #[test]
+    fn delete_selected_rows_requires_editability() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.toggle_row_selection(0);
+        grid.delete_selected_rows();
+        assert!(!grid.deleted.contains(&0));
+    }
+
+    #[test]
+    fn row_selection_independent_from_visual_selection() {
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+        grid.toggle_row_selection(0);
+        grid.enter_visual_mode();
+        grid.move_down();
+        grid.move_right();
+        assert!(grid.is_row_selected(0));
+        assert!(grid.is_cell_selected(0, 1));
+        grid.exit_visual_mode();
+        assert!(grid.is_row_selected(0));
+        assert!(!grid.is_cell_selected(0, 1));
     }
 }

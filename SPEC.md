@@ -631,6 +631,22 @@ concreto vive en cada implementación.
 - *When* se pulsa `Esc` o `v` en modo Visual
 - *Then* se abandona el modo Visual y el resaltado desaparece
 
+**Selección de filas completas del grid**
+- *Given* el foco está en el grid, hay resultados visibles y no hay modo Visual activo
+- *When* se pulsa `x` sobre una fila
+- *Then* toda la fila se resalta como seleccionada
+- *When* se pulsa `x` sobre una fila ya seleccionada
+- *Then* la fila deja de estar seleccionada
+- *When* se pulsa `Esc`
+- *Then* se deseleccionan todas las filas
+- *When* se pulsa `y` teniendo una o más filas seleccionadas
+- *Then* aparece un picker con opciones CSV, TSV, JSON, SQL INSERT
+- *When* se selecciona un formato y pulsa Enter
+- *Then* el contenido completo de las filas seleccionadas se copia al portapapeles en ese
+  formato y aparece una notificación transitoria
+- *When* se pulsa `d` teniendo filas seleccionadas en un grid editable
+- *Then* todas las filas seleccionadas se marcan para borrado
+
 ---
 
 ## 18. Rationale de las decisiones de producto

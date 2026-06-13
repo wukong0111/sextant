@@ -50,6 +50,8 @@ pub enum Action {
     AutoFitAll,
     EnterVisualMode,
     CopySelection,
+    ToggleRowSelection,
+    CopySelectedRows,
 }
 
 impl Action {
@@ -87,6 +89,8 @@ impl Action {
             "auto_fit_all" => Action::AutoFitAll,
             "enter_visual_mode" => Action::EnterVisualMode,
             "copy_selection" => Action::CopySelection,
+            "toggle_row_selection" => Action::ToggleRowSelection,
+            "copy_selected_rows" => Action::CopySelectedRows,
             _ => return None,
         })
     }
@@ -125,6 +129,8 @@ impl Action {
             Action::AutoFitAll => "auto-fit all columns",
             Action::EnterVisualMode => "enter visual mode (grid selection)",
             Action::CopySelection => "copy selection",
+            Action::ToggleRowSelection => "toggle row selection (grid)",
+            Action::CopySelectedRows => "copy selected rows",
         }
     }
 }
@@ -299,6 +305,8 @@ impl Keymap {
             ("<Space>W", Action::AutoFitAll),
             ("v", Action::EnterVisualMode),
             ("<C-c>", Action::CopySelection),
+            ("x", Action::ToggleRowSelection),
+            ("y", Action::CopySelectedRows),
         ];
         let mut map = Self {
             bindings: Vec::new(),
@@ -606,11 +614,11 @@ mod tests {
     #[test]
     fn unknown_action_name_is_skipped() {
         let user = vec![RawBinding {
-            keys: "x".into(),
+            keys: "q".into(),
             action: "frobnicate".into(),
         }];
         let map = Keymap::with_user_bindings(&user);
         let mut state = ChordState::default();
-        assert_eq!(state.feed(&map, key('x')), None);
+        assert_eq!(state.feed(&map, key('q')), None);
     }
 }
