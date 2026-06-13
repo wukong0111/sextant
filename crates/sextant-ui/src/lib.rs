@@ -197,7 +197,7 @@ impl std::fmt::Display for Mode {
         match self {
             Mode::Normal => write!(f, "NOR"),
             Mode::Insert => write!(f, "INS"),
-            Mode::Visual => write!(f, "VIS"),
+            Mode::Visual => write!(f, "SEL"),
         }
     }
 }
@@ -3148,6 +3148,24 @@ mod tests {
 
         let idx = last_row.iter().position(|c| c.symbol() == "I").unwrap();
         assert_eq!(last_row[idx].style().bg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn renders_visual_mode_as_sel() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.mode = Mode::Visual;
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let last_row = buf.content.chunks(buf.area.width as usize).last().unwrap();
+        let text: String = last_row.iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("SEL"),
+            "status line should show Visual mode as SEL: {text}"
+        );
     }
 
     #[test]

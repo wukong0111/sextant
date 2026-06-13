@@ -629,7 +629,7 @@ concreto vive en cada implementación.
 - *Given* el foco está en el grid y hay resultados visibles
 - *When* se pulsa `v`
 - *Then* el modo pasa a Visual, la celda actual se convierte en el ancla, y el
-  status bar muestra `VIS`
+  status bar muestra `SEL`
 - *When* se mueve el cursor con `h/j/k/l`
 - *Then* el rango rectangular entre el ancla y el cursor se resalta en el grid
 - *When* se pulsa `y`
