@@ -663,6 +663,14 @@ concreto vive en cada implementación.
 - *Then* el contenido de esa celda se copia al portapapeles como texto plano, sin formato
   especial, y aparece una notificación transitoria
 
+**Cursor visible en edición de celda del grid**
+- *Given* el foco está en una celda editable del grid y se ha entrado en modo de edición con `i`
+- *When* se escriben caracteres o se pulsa `Backspace`
+- *Then* el texto se inserta o borra en la posición del cursor
+- *And* el cursor se mueve con `Left`, `Right`, `Home` y `End`
+- *And* el carácter bajo el cursor se muestra con estilo invertido (o un bloque invertido al
+  final del texto), de modo que siempre es visible dónde se insertará el siguiente carácter
+
 ---
 
 ## 18. Rationale de las decisiones de producto

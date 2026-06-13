@@ -42,6 +42,67 @@ struct CellEdit {
     row: usize,
     col: usize,
     buffer: String,
+    /// Cursor position in Unicode scalar values (`0..=buffer.chars().count()`).
+    cursor: usize,
+}
+
+impl CellEdit {
+    fn move_cursor_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    fn move_cursor_right(&mut self) {
+        let len = self.buffer.chars().count();
+        if self.cursor < len {
+            self.cursor += 1;
+        }
+    }
+
+    fn move_cursor_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn move_cursor_end(&mut self) {
+        self.cursor = self.buffer.chars().count();
+    }
+
+    fn insert_char(&mut self, c: char) {
+        let len = self.buffer.chars().count();
+        if self.cursor >= len {
+            self.buffer.push(c);
+        } else {
+            let idx = self
+                .buffer
+                .char_indices()
+                .nth(self.cursor)
+                .map(|(i, _)| i)
+                .unwrap_or(self.buffer.len());
+            self.buffer.insert(idx, c);
+        }
+        self.cursor += 1;
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let start = self
+            .buffer
+            .char_indices()
+            .nth(self.cursor - 1)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let end = self
+            .buffer
+            .char_indices()
+            .nth(self.cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.buffer.len());
+        self.buffer.drain(start..end);
+        self.cursor -= 1;
+    }
 }
 
 /// A grid that displays `QueryResult` rows and supports inline CRUD editing.
@@ -549,10 +610,12 @@ impl ResultGrid {
             return;
         }
         let buffer = self.cell_display(self.cursor_row, self.cursor_col);
+        let cursor = buffer.chars().count();
         self.editing = Some(CellEdit {
             row: self.cursor_row,
             col: self.cursor_col,
             buffer,
+            cursor,
         });
     }
 
@@ -571,11 +634,27 @@ impl ResultGrid {
                 false
             }
             KeyCode::Backspace => {
-                edit.buffer.pop();
+                edit.backspace();
                 true
             }
             KeyCode::Char(c) => {
-                edit.buffer.push(c);
+                edit.insert_char(c);
+                true
+            }
+            KeyCode::Left => {
+                edit.move_cursor_left();
+                true
+            }
+            KeyCode::Right => {
+                edit.move_cursor_right();
+                true
+            }
+            KeyCode::Home => {
+                edit.move_cursor_home();
+                true
+            }
+            KeyCode::End => {
+                edit.move_cursor_end();
                 true
             }
             _ => true,
@@ -855,11 +934,6 @@ impl ResultGrid {
                     .as_ref()
                     .map(|e| e.row == row_idx && e.col == col_idx)
                     .unwrap_or(false);
-                let text = if editing_here {
-                    self.editing.as_ref().unwrap().buffer.clone()
-                } else {
-                    self.cell_display(row_idx, col_idx)
-                };
                 let is_active = row_idx == self.cursor_row && col_idx == self.cursor_col;
                 let is_edited = self.edits.contains_key(&(row_idx, col_idx));
                 let is_deleted = self.deleted.contains(&row_idx);
@@ -888,10 +962,19 @@ impl ResultGrid {
                     } else {
                         base_style
                     };
-                frame.render_widget(
-                    ratatui::widgets::Paragraph::new(text).style(style),
-                    Rect::new(x, row_y, render_width, 1),
-                );
+                if editing_here {
+                    let edit = self.editing.as_ref().unwrap();
+                    frame.render_widget(
+                        editing_paragraph(edit, style, render_width),
+                        Rect::new(x, row_y, render_width, 1),
+                    );
+                } else {
+                    let text = self.cell_display(row_idx, col_idx);
+                    frame.render_widget(
+                        ratatui::widgets::Paragraph::new(text).style(style),
+                        Rect::new(x, row_y, render_width, 1),
+                    );
+                }
             }
 
             x += col_width;
@@ -909,6 +992,69 @@ impl ResultGrid {
     pub fn cursor_col(&self) -> usize {
         self.cursor_col
     }
+}
+
+/// Render an in-progress cell edit as a one-line paragraph with a visible cursor.
+///
+/// The character under the cursor is drawn with `Modifier::REVERSED`; when the
+/// cursor sits at the end of the buffer a reversed space acts as a block cursor.
+/// If the buffer is wider than `width`, the visible window is shifted so the
+/// cursor always stays in view.
+fn editing_paragraph(
+    edit: &CellEdit,
+    base_style: Style,
+    width: u16,
+) -> ratatui::widgets::Paragraph<'_> {
+    let chars: Vec<char> = edit.buffer.chars().collect();
+    let cursor = edit.cursor.min(chars.len());
+    let width = width as usize;
+
+    // Total logical width: buffer length plus one cell for the end-of-buffer
+    // block cursor.
+    let total_width = chars.len() + 1;
+    let start = if total_width <= width {
+        0
+    } else if cursor == chars.len() {
+        // Keep the block cursor at the right edge; show the trailing chars.
+        chars.len() + 1 - width
+    } else {
+        // Show as much leading text as possible while keeping the cursor char
+        // inside the window.
+        cursor.saturating_sub(width - 1)
+    };
+
+    let mut spans = Vec::new();
+    let end = (start + width).min(chars.len());
+
+    if cursor < chars.len() {
+        // Text before the cursor character.
+        if start < cursor {
+            let before: String = chars[start..cursor].iter().collect();
+            spans.push(Span::styled(before, base_style));
+        }
+        // Cursor character.
+        spans.push(Span::styled(
+            chars[cursor].to_string(),
+            base_style.add_modifier(Modifier::REVERSED),
+        ));
+        // Text after the cursor character.
+        if cursor + 1 < end {
+            let after: String = chars[cursor + 1..end].iter().collect();
+            spans.push(Span::styled(after, base_style));
+        }
+    } else {
+        // Cursor at end: show trailing text plus a block cursor.
+        if start < chars.len() {
+            let visible: String = chars[start..chars.len()].iter().collect();
+            spans.push(Span::styled(visible, base_style));
+        }
+        spans.push(Span::styled(
+            " ",
+            base_style.add_modifier(Modifier::REVERSED),
+        ));
+    }
+
+    ratatui::widgets::Paragraph::new(Line::from(spans))
 }
 
 /// Borrow a `Vec<(String, String)>` as `Vec<(&str, &str)>` for the SQL builders.
@@ -984,7 +1130,7 @@ fn first_visible_column(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
     use sextant_core::{CellValue, Column};
 
     fn sample_result() -> QueryResult {
@@ -1758,5 +1904,169 @@ mod tests {
         grid.cursor_col = 1;
         type_into_cell(&mut grid, "Alicia");
         assert_eq!(grid.copy_current_cell().unwrap(), "Alicia");
+    }
+
+    #[test]
+    fn cursor_starts_at_end_of_initial_value() {
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1; // "Alice"
+        grid.begin_edit();
+        let edit = grid.editing.as_ref().expect("should be editing");
+        assert_eq!(edit.buffer, "Alice");
+        assert_eq!(edit.cursor, 5);
+    }
+
+    #[test]
+    fn cursor_moves_with_arrow_keys() {
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+        grid.begin_edit();
+
+        grid.handle_edit_key(key(KeyCode::Home));
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 0);
+
+        grid.handle_edit_key(key(KeyCode::Left));
+        assert_eq!(
+            grid.editing.as_ref().unwrap().cursor,
+            0,
+            "should clamp at start"
+        );
+
+        grid.handle_edit_key(key(KeyCode::Right));
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 1);
+
+        grid.handle_edit_key(key(KeyCode::End));
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 5);
+
+        grid.handle_edit_key(key(KeyCode::Right));
+        assert_eq!(
+            grid.editing.as_ref().unwrap().cursor,
+            5,
+            "should clamp at end"
+        );
+    }
+
+    #[test]
+    fn typing_inserts_at_cursor() {
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+        grid.begin_edit();
+
+        grid.handle_edit_key(key(KeyCode::Home));
+        grid.handle_edit_key(key(KeyCode::Char('X')));
+        assert_eq!(grid.editing.as_ref().unwrap().buffer, "XAlice");
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 1);
+
+        grid.handle_edit_key(key(KeyCode::End));
+        grid.handle_edit_key(key(KeyCode::Char('!')));
+        assert_eq!(grid.editing.as_ref().unwrap().buffer, "XAlice!");
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 7);
+    }
+
+    #[test]
+    fn backspace_deletes_before_cursor() {
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+        grid.begin_edit();
+
+        // "Alice", move cursor to position 4 (before 'e'), backspace -> "Alie"
+        grid.handle_edit_key(key(KeyCode::End));
+        grid.handle_edit_key(key(KeyCode::Left));
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 4);
+
+        grid.handle_edit_key(key(KeyCode::Backspace));
+        assert_eq!(grid.editing.as_ref().unwrap().buffer, "Alie");
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 3);
+    }
+
+    #[test]
+    fn backspace_at_start_is_noop() {
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+        grid.begin_edit();
+
+        grid.handle_edit_key(key(KeyCode::Home));
+        grid.handle_edit_key(key(KeyCode::Backspace));
+        assert_eq!(grid.editing.as_ref().unwrap().buffer, "Alice");
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn cursor_clamps_to_buffer_bounds() {
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+        grid.begin_edit();
+
+        // Delete the whole buffer from the end, then keep backspacing at start.
+        grid.handle_edit_key(key(KeyCode::End));
+        for _ in 0..10 {
+            grid.handle_edit_key(key(KeyCode::Backspace));
+        }
+        assert!(grid.editing.as_ref().unwrap().buffer.is_empty());
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 0);
+
+        grid.handle_edit_key(key(KeyCode::Left));
+        assert_eq!(grid.editing.as_ref().unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn render_reverses_character_at_cursor() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+        grid.begin_edit();
+        // Place cursor over 'l' (position 2) in "Alice".
+        grid.handle_edit_key(key(KeyCode::Home));
+        grid.handle_edit_key(key(KeyCode::Right));
+        grid.handle_edit_key(key(KeyCode::Right));
+
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        // Find a cell with the REVERSED modifier inside the rendered grid.
+        let reversed: Vec<_> = buf
+            .content
+            .iter()
+            .filter(|c| c.modifier.contains(Modifier::REVERSED))
+            .collect();
+        assert!(
+            !reversed.is_empty(),
+            "expected at least one reversed cell for the cursor"
+        );
+    }
+
+    #[test]
+    fn render_shows_block_cursor_at_end() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut grid = editable_grid();
+        grid.cursor_row = 0;
+        grid.cursor_col = 1;
+        grid.begin_edit(); // cursor at end
+
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let reversed: Vec<_> = buf
+            .content
+            .iter()
+            .filter(|c| c.modifier.contains(Modifier::REVERSED))
+            .collect();
+        assert!(
+            !reversed.is_empty(),
+            "expected a reversed block cursor at end of buffer"
+        );
     }
 }
