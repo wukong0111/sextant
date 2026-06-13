@@ -49,9 +49,8 @@ pub enum Action {
     AutoFitColumn,
     AutoFitAll,
     EnterVisualMode,
-    CopySelection,
+    Copy,
     ToggleRowSelection,
-    CopySelectedRows,
 }
 
 impl Action {
@@ -88,9 +87,8 @@ impl Action {
             "auto_fit_column" => Action::AutoFitColumn,
             "auto_fit_all" => Action::AutoFitAll,
             "enter_visual_mode" => Action::EnterVisualMode,
-            "copy_selection" => Action::CopySelection,
+            "copy" => Action::Copy,
             "toggle_row_selection" => Action::ToggleRowSelection,
-            "copy_selected_rows" => Action::CopySelectedRows,
             _ => return None,
         })
     }
@@ -128,9 +126,8 @@ impl Action {
             Action::AutoFitColumn => "auto-fit current column",
             Action::AutoFitAll => "auto-fit all columns",
             Action::EnterVisualMode => "enter visual mode (grid selection)",
-            Action::CopySelection => "copy selection",
+            Action::Copy => "copy selection or selected rows",
             Action::ToggleRowSelection => "toggle row selection (grid)",
-            Action::CopySelectedRows => "copy selected rows",
         }
     }
 }
@@ -304,9 +301,8 @@ impl Keymap {
             ("<Space>w", Action::AutoFitColumn),
             ("<Space>W", Action::AutoFitAll),
             ("v", Action::EnterVisualMode),
-            ("<C-c>", Action::CopySelection),
             ("x", Action::ToggleRowSelection),
-            ("y", Action::CopySelectedRows),
+            ("y", Action::Copy),
         ];
         let mut map = Self {
             bindings: Vec::new(),

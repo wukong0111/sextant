@@ -812,7 +812,7 @@ impl App {
             return;
         }
 
-        // Visual mode captures h/j/k/l, Esc, v, and <C-c> before the normal keymap.
+        // Visual mode captures h/j/k/l, Esc, v, and y before the normal keymap.
         if self.mode == Mode::Visual {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('v') => {
@@ -824,7 +824,7 @@ impl App {
                 KeyCode::Char('j') => self.result_grid.move_down(),
                 KeyCode::Char('k') => self.result_grid.move_up(),
                 KeyCode::Char('l') => self.result_grid.move_right(),
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('y') => {
                     self.open_copy_format_picker();
                 }
                 _ => {
@@ -968,19 +968,17 @@ impl App {
                     self.mode = Mode::Visual;
                 }
             }
-            Action::CopySelection => {
-                // CopySelection is handled directly in visual mode key capture;
-                // in normal mode it is a no-op.
+            Action::Copy => {
+                // In Normal mode, copy only fires when full rows are selected.
+                // Visual-mode copy is handled directly in the Visual key capture.
+                if self.focus == Focus::Grid && self.result_grid.has_row_selection() {
+                    self.open_copy_format_picker();
+                }
             }
             Action::ToggleRowSelection => {
                 if self.focus == Focus::Grid {
                     let row = self.result_grid.cursor_row();
                     self.result_grid.toggle_row_selection(row);
-                }
-            }
-            Action::CopySelectedRows => {
-                if self.focus == Focus::Grid && self.result_grid.has_row_selection() {
-                    self.open_copy_format_picker();
                 }
             }
         }

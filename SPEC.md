@@ -623,7 +623,7 @@ concreto vive en cada implementación.
   status bar muestra `VIS`
 - *When* se mueve el cursor con `h/j/k/l`
 - *Then* el rango rectangular entre el ancla y el cursor se resalta en el grid
-- *When* se pulsa `<Ctrl-c>`
+- *When* se pulsa `y`
 - *Then* aparece un picker con opciones CSV, TSV, JSON, SQL INSERT
 - *When* se selecciona un formato y pulsa Enter
 - *Then* el contenido del rango seleccionado se copia al portapapeles en ese
