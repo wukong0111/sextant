@@ -20,8 +20,9 @@ check: ## Full verification: compile, test, fmt check, clippy
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets
 
-e2e: ## Run the PTY end-to-end tests (no Docker needed; SQLite only)
+e2e: ## Run the PTY end-to-end tests (SQLite always; PG/MySQL when Docker is available)
 	cargo test -p sextant-cli --test e2e
+	cargo test -p sextant-cli --test e2e_drivers
 
 smoke: ## Print live "screenshots" of the running TUI (manual, no TTY needed)
 	cargo test -p sextant-cli --test smoke -- --ignored --nocapture
@@ -36,7 +37,7 @@ test-db-up: ## Start PostgreSQL and MySQL test containers
 test-db-down: ## Stop and remove test containers and volumes
 	$(DOCKER_COMPOSE) down -v
 
-test-integration: ## Run integration tests against Docker databases
+test-integration: ## Run integration tests against Docker databases (PG/MySQL)
 	cargo test --workspace
 
 test-db: test-db-up test-integration test-db-down ## Full cycle: start DBs, run tests, tear down

@@ -89,7 +89,7 @@ impl SqlxExecutor {
                     .acquire()
                     .await
                     .map_err(|e| SextantError::Database(format!("begin failed: {e}")))?;
-                sqlx::query::<$db>(sqlx::AssertSqlSafe(sql))
+                sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
                     .execute(&mut *conn)
                     .await
                     .map_err(|e| SextantError::Database(format!("begin failed: {e}")))?;
@@ -231,18 +231,18 @@ impl QueryExecutor for SqlxExecutor {
 /// to the pool.
 async fn close_held(held: HeldConn, sql: &str) -> Result<(), SextantError> {
     macro_rules! close {
-        ($db:ty, $conn:expr) => {{
+        ($conn:expr) => {{
             let mut conn = $conn;
-            sqlx::query::<$db>(sqlx::AssertSqlSafe(sql))
+            sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
                 .execute(&mut *conn)
                 .await
                 .map_err(|e| SextantError::Database(format!("transaction end failed: {e}")))?;
         }};
     }
     match held {
-        HeldConn::Postgres(c) => close!(sqlx::Postgres, c),
-        HeldConn::MySql(c) => close!(sqlx::MySql, c),
-        HeldConn::Sqlite(c) => close!(sqlx::Sqlite, c),
+        HeldConn::Postgres(c) => close!(c),
+        HeldConn::MySql(c) => close!(c),
+        HeldConn::Sqlite(c) => close!(c),
     }
     Ok(())
 }
@@ -336,7 +336,18 @@ fn map_pg_cell(
     if let Ok(v) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
         return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
     }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row
+        .try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::FixedOffset>>, _>(idx)
+    {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
     if let Ok(v) = row.try_get::<Option<sqlx::types::JsonValue>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::Uuid>, _>(idx) {
         return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
     }
     if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
@@ -386,6 +397,9 @@ fn map_mysql_cell(
         return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
     }
     if let Ok(v) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
+        return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
+    }
+    if let Ok(v) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {
         return Ok(v.map_or(CellValue::Null, |v| CellValue::String(v.to_string())));
     }
     if let Ok(v) = row.try_get::<Option<sqlx::types::JsonValue>, _>(idx) {

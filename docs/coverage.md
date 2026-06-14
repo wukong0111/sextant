@@ -16,25 +16,25 @@ names on purpose; this mapping is per-implementation and lives here.
 | # | `SPEC.md` §17 scenario | Tier | Tests |
 |---|------------------------|------|-------|
 | 1 | Arranque y salida limpia | **E2E** | `boots_renders_connection_and_quits_cleanly`; app: `app_default_state`, `ctrl_q_sets_should_quit`, `ctrl_q_with_dirty_buffer_prompts` |
-| 2 | Conectar y consultar | **E2E** | `editor_query_is_recorded_in_history`; app: `editor_toggle_with_space_e`, `grid_renders_when_result_present`, `status_line_shows_row_count_and_duration` |
-| 3 | El historial registra toda ejecución | **E2E** | `editor_query_is_recorded_in_history`; unit: `query_history_records_and_lists_newest_first` (incl. fila con error), `recent_queries_respects_limit` |
-| 4 | Browse de tabla (`SELECT * … LIMIT 500`) | **E2E+APP** | `browse_table_renders_rows_with_limit` (flujo árbol→grid); app: `browse_table_builds_select_with_limit_500` (contrato SQL: `LIMIT 500` + quoting) |
+| 2 | Conectar y consultar | **E2E** | `editor_query_is_recorded_in_history` (SQLite); `connect_and_query_records_in_history` (SQLite + PG/MySQL vía PTY cuando Docker está disponible); app: `editor_toggle_with_space_e`, `grid_renders_when_result_present`, `status_line_shows_row_count_and_duration` |
+| 3 | El historial registra toda ejecución | **E2E** | `editor_query_is_recorded_in_history`; `connect_and_query_records_in_history`; unit: `query_history_records_and_lists_newest_first` (incl. fila con error), `recent_queries_respects_limit` |
+| 4 | Browse de tabla (`SELECT * … LIMIT 500`) | **E2E+APP** | `browse_table_renders_rows_with_limit` (SQLite), `browse_table_renders_rows` (SQLite + PG/MySQL); app: `browse_table_builds_select_with_limit_500` |
 | 5 | Edición del grid + concurrencia optimista | **APP+UNIT** | widget: `editing_a_cell_generates_update`, `adding_a_row_generates_insert`, `marking_a_row_generates_delete`, `editing_pk_uses_original_value_in_where`, `discard_clears_all_pending`; app: `ctrl_s_opens_commit_modal_and_esc_cancels`; unit `sql.rs`: `update_statement_by_pk`, `where_match_uses_is_null_for_null_values`, `update_with_null_original_in_where`. **Sin PTY** para el commit completo |
 | 6 | Grid de solo lectura | **UNIT** | `read_only_without_context_or_pk` |
-| 7 | Transacción de sesión psql-style | **UNIT** | `session_transaction_commits`, `session_transaction_rolls_back` (ve cambios no confirmados), `classifies_txn_control`. **Sin PTY** |
+| 7 | Transacción de sesión psql-style | **UNIT** | `session_transaction_commits`, `session_transaction_rolls_back` (SQLite); `postgresql_session_transaction_commits`, `postgresql_session_transaction_rolls_back`, `mysql_session_transaction_commits`, `mysql_session_transaction_rolls_back`; `classifies_txn_control`. **Sin PTY** |
 | 8 | Guardia de operaciones destructivas | **APP+UNIT** | app: `dangerous_editor_sql_requires_confirmation`, `safe_editor_sql_runs_without_prompt`; unit: `dangerous_flags_unguarded_dml_and_ddl`, `dangerous_allows_guarded_dml_and_reads` |
 | 9 | Resolución de credenciales | **APP+UNIT** | unit `sextant-config`: `connection_password_from_env`, `resolve_password_prefers_keyring_over_env` (orden), `resolve_password_falls_back_to_env`, `resolve_password_prompts_when_keyring_key_but_no_secret`, `resolve_password_sqlite_never_prompts`, `resolve_password_tcp_without_keyring_key_connects_passwordless`; app (doble en memoria `InMemoryStore`): `password_prompt_captures_input_and_cancels`, `start_connection_consults_store_then_prompts`, `persist_pending_credential_saves_on_match_and_clears`, `persist_pending_credential_ignores_other_connections`, `failed_connection_discards_pending_credential`. Costuras en ADR-0005. **Sin PTY**; keyring real y connect real → QA manual |
-| 10 | Export | **E2E** | `exports_result_set_to_csv_file`; unit `export.rs`: `csv_has_header_and_empty_null`, `tsv_has_header_and_tab_delimited_null`, `json_is_array_of_objects_with_typed_values`, `sql_emits_insert_per_row_with_typed_literals`, … |
-| 11 | Import | **E2E** | `imports_csv_into_selected_table`; unit `import.rs`: `csv_parses_header_and_rows`, `preview_counts_type_issues`, `build_inserts_uses_only_mapped_columns_and_typed_literals`, … |
+| 10 | Export | **E2E** | `exports_result_set_to_csv_file` (SQLite), `exports_result_set_to_csv_file` multi-driver; unit `export.rs`: `csv_has_header_and_empty_null`, `tsv_has_header_and_tab_delimited_null`, `json_is_array_of_objects_with_typed_values`, `sql_emits_insert_per_row_with_typed_literals`, … |
+| 11 | Import | **E2E** | `imports_csv_into_selected_table` (SQLite), `imports_csv_into_selected_table` multi-driver; unit `import.rs`: `csv_parses_header_and_rows`, `preview_counts_type_issues`, `build_inserts_uses_only_mapped_columns_and_typed_literals`, … |
 | 12 | Recuperación ante caída (swap) | **APP+UNIT** | app: `recovery_restore_loads_buffers_into_editor`, `recovery_discard_clears_prompt_without_opening_editor`; unit `swap.rs`: `round_trips_through_json`, `parse_rejects_garbage`, `session_path_is_in_swap_dir`. **Sin PTY** |
 | 13 | Remapeo de teclas | **UNIT** | `user_binding_overrides_default_chord`, `user_can_add_alternate_chord`, `unknown_action_name_is_skipped` |
-| 14 | Autocomplete de tablas y columnas | **E2E** | `autocomplete_inserts_table_name`; unit: `after_from_filters_by_prefix`, `dotted_table_offers_columns`, `ctrl_space_triggers_table_completion`, `enter_accepts_completion_and_replaces_prefix` |
-| 15 | Schema viewer (columnas en árbol) | **E2E** | `schema_viewer_shows_columns_in_tree`; unit: `expand_table_shows_columns` |
-| 16 | Pista de ayuda siempre visible | **APP** | `help_hint_stays_visible_with_grid_focused` (render con grid editable enfocado: la pista de ayuda persiste junto a las pistas contextuales) |
-| 17 | Realimentación de chord pendiente | **E2E+UNIT** | `leader_shows_which_key_menu` (popup tras leader → completa con `e`); unit `keymap.rs`: `leader_continuations_list_actions`, `non_leader_prefix_echoes_pending`, `pending_display_empty_when_idle`, `leader_key_is_recognized` |
-| 18 | Navegación horizontal del grid | **UNIT** | widget `result_grid.rs`: `grid_scrolls_to_keep_cursor_visible` (render con cursor en columna fuera de vista), `first_visible_column_no_scroll_when_all_fit`, `first_visible_column_scrolls_to_show_cursor` (offset mínimo) |
-| 19 | Redimensionamiento de columnas del grid | **E2E** | `grid_columns_can_be_resized` (5 columnas, widen/narrow en cada una, auto-fit restaura); `grid_columns_resize_on_full_schema` (13-column `users`, narrow trunca contenido, auto-fit restaura) |
-| 20 | Selección rectangular de celdas del grid | **APP+UNIT** | app: `renders_visual_mode_as_sel` (status line muestra `SEL`); widget `result_grid.rs`: `visual_mode_selects_single_cell`, `visual_mode_expands_rectangle`, `visual_mode_reverse_selection`, `copy_as_csv_basic`, `copy_as_tsv_basic`, `copy_as_json_basic`, `copy_as_sql_insert_basic`, `copy_without_selection_fails` |
+| 14 | Autocomplete de tablas y columnas | **E2E** | `autocomplete_inserts_table_name` (SQLite), `autocomplete_inserts_table_name` multi-driver; unit: `after_from_filters_by_prefix`, `dotted_table_offers_columns`, `ctrl_space_triggers_table_completion`, `enter_accepts_completion_and_replaces_prefix` |
+| 15 | Schema viewer (columnas en árbol) | **E2E** | `schema_viewer_shows_columns_in_tree` (SQLite), `schema_viewer_shows_columns_in_tree` multi-driver; unit: `expand_table_shows_columns` |
+| 16 | Pista de ayuda siempre visible | **APP** | `help_hint_stays_visible_with_grid_focused` |
+| 17 | Realimentación de chord pendiente | **E2E+UNIT** | `leader_shows_which_key_menu`; unit `keymap.rs`: `leader_continuations_list_actions`, `non_leader_prefix_echoes_pending`, `pending_display_empty_when_idle`, `leader_key_is_recognized` |
+| 18 | Navegación horizontal del grid | **UNIT** | widget `result_grid.rs`: `grid_scrolls_to_keep_cursor_visible`, `first_visible_column_no_scroll_when_all_fit`, `first_visible_column_scrolls_to_show_cursor` |
+| 19 | Redimensionamiento de columnas del grid | **E2E** | `grid_columns_can_be_resized`, `grid_columns_resize_on_full_schema` |
+| 20 | Selección rectangular de celdas del grid | **APP+UNIT** | app: `renders_visual_mode_as_sel`; widget `result_grid.rs`: `visual_mode_selects_single_cell`, `visual_mode_expands_rectangle`, `visual_mode_reverse_selection`, `copy_as_csv_basic`, `copy_as_tsv_basic`, `copy_as_json_basic`, `copy_as_sql_insert_basic`, `copy_without_selection_fails` |
 | 21 | Selección de filas completas del grid | **UNIT** | widget `result_grid.rs`: `toggle_row_selection_adds_and_removes_row`, `clear_row_selection_clears_all`, `set_result_clears_row_selection`, `copy_selected_rows_as_csv`, `copy_selected_rows_as_tsv`, `copy_selected_rows_as_json`, `copy_selected_rows_as_sql_insert`, `copy_selected_rows_without_selection_fails`, `delete_selected_rows_marks_deleted`, `delete_selected_rows_requires_editability`, `row_selection_independent_from_visual_selection` |
 | 22 | Copia rápida de celda individual | **UNIT** | widget `result_grid.rs`: `copy_current_cell_returns_text`, `copy_current_cell_without_result_fails`, `copy_current_cell_honors_pending_edit` |
 | 23 | Entrada en edición de celda del grid | **APP** | `grid_i_enters_cell_edit_mode`, `grid_enter_does_not_enter_cell_edit_mode` |
@@ -43,7 +43,7 @@ names on purpose; this mapping is per-implementation and lives here.
 
 ## Resumen
 
-- **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15, 17, 19**.
+- **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15, 17, 19**. SQLite siempre; PostgreSQL y MySQL cuando Docker está disponible (`e2e_drivers.rs`).
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
   **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22, 23, 25**.
 - **Huecos reales**: ninguno pendiente.
@@ -64,9 +64,6 @@ funcional está en `SPEC.md` §17; el *setup* en las skills `db-setup` /
 - **Feel en TTY real** — timing de pulsaciones, secuencias de escape (un `Esc`
   solo vs. inicio de secuencia), ausencia de glitches de render, layout y status
   line correctos en ~80 columnas.
-- **Multi-driver PG / MySQL** — los e2e solo cubren SQLite; el comportamiento
-  contra PostgreSQL y MySQL (conexión, introspección de índices/FKs, browse,
-  edición + commit) solo se ejercita a mano con los contenedores Docker.
 - **Keyring real y connect real (§17.9)** — los tests usan un `CredentialStore`
   en memoria y no construyen una conexión real (ver ADR-0005). Queda manual:
   conectar a PG/MySQL con `keyring_key` sin secreto → prompt enmascarado → tras
@@ -82,4 +79,6 @@ funcional está en `SPEC.md` §17; el *setup* en las skills `db-setup` /
 Toda feature nueva o cambio de comportamiento añade su criterio en `SPEC.md` §17
 y su(s) test(s) aquí (ver `docs/documentation-guide.md`). Un escenario sin fila
 en esta tabla, o con tier **—**, es deuda de test explícita. Lo no automatizable
-(color, feel en TTY, multi-driver) pertenece a la sección anterior.
+(color, feel en TTY, keyring/portapapeles reales) pertenece a la sección anterior.
+Los tests multi-driver deben ejecutarse con Docker disponible (`make test-db` o
+`make e2e`).

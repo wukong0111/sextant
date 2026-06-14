@@ -21,8 +21,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 # End-to-end TUI testing: drive the real binary through a pseudo-terminal,
-# parse its ANSI output into a virtual screen, and seed/inspect SQLite.
+# parse its ANSI output into a virtual screen, and seed/inspect databases.
 portable-pty = "0.8"
 vt100 = "0.15"
 tempfile = "3"
 rusqlite = { version = "0.32", features = ["bundled"] }
+sextant-core = { path = "../sextant-core" }
+sqlx = { workspace = true }
+tokio = { workspace = true }

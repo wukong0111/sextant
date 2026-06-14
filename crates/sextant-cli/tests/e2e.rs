@@ -447,7 +447,7 @@ fn imports_csv_into_selected_table() {
     );
 
     // Cross-check the backend: the imported row is now in the user's database.
-    let conn = rusqlite::Connection::open(&fx.db).unwrap();
+    let conn = fx.sqlite_conn().unwrap();
     let name: String = conn
         .query_row("SELECT name FROM users WHERE id = 3", [], |r| r.get(0))
         .unwrap();

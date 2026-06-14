@@ -103,6 +103,19 @@ The lifecycle is:
 
 ---
 
+## Agent Operating Autonomy
+
+The user expects the agent to act with **maximum sensible autonomy** once a task is accepted. This section hardens the workflow above into explicit defaults.
+
+- **Run `make check` after every non-trivial change.** Do not report completion until it passes. If it fails, fix it in the same turn if the fix is clearly within scope.
+- **Run Docker-backed tests when Docker is available.** Prefer `make test-db`; otherwise ensure `docker compose` is up and run `cargo test --workspace`. Multi-driver tests skip cleanly without Docker, so availability is the default assumption.
+- **Do not ask permission for routine, low-risk steps** such as formatting, adjusting imports, renaming local variables, adding tests, or re-running the test suite.
+- **When multiple technical options exist, choose the recommended one and document the trade-off.** Only stop and ask when the choice affects architecture, security, public API, or the product contract in `SPEC.md`.
+- **If a bug surfaces during verification, fix it in the same cycle** when it is obviously related to the accepted task. Report it as a discovered issue, not as a blocker.
+- **Keep the user informed, not consulted.** Summarize what was done and why; do not request confirmation for each step.
+
+---
+
 ## Quick Reference
 
 | Command | Purpose |

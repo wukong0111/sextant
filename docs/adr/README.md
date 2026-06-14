@@ -39,3 +39,5 @@ Plantilla [Nygard](https://cognitect.com/blog/2011/11/15/documenting-architectur
 | [0004](0004-credenciales-via-keyring-del-so.md) | Credenciales vía keyring del SO | Aceptado |
 | [0005](0005-credential-store-inyectable-para-testabilidad.md) | `CredentialStore` inyectable para testabilidad | Aceptado |
 | [0006](0006-menu-which-key-solo-para-el-leader.md) | Menú which-key solo para el leader | Aceptado |
+| [0007](0007-renderizado-manual-del-grid-en-lugar-de-table.md) | Renderizado manual del grid en lugar de `Table` | Aceptado |
+| [0008](0008-raw-sql-para-control-de-transacciones-en-mysql.md) | `raw_sql` para control de transacciones en MySQL | Aceptado |
