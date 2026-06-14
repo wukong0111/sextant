@@ -276,6 +276,10 @@ pub struct App {
     /// Resolved theme colors used across the UI.
     palette: Palette,
     needs_redraw: bool,
+    /// Current width of the sidebar tree pane, in columns. A value of 0 means
+    /// "not yet initialized" and is resolved to a percentage of the terminal
+    /// width on the first render.
+    sidebar_width: u16,
 }
 
 impl App {
@@ -341,6 +345,7 @@ impl App {
             result_grid,
             palette,
             needs_redraw: true,
+            sidebar_width: 0,
         })
     }
 
@@ -353,9 +358,21 @@ impl App {
             .constraints([Constraint::Min(0), Constraint::Length(1)])
             .split(area);
 
+        // Resolve the sidebar width the first time we render, then keep it
+        // stable across redraws so the user can adjust it with < >.
+        if self.sidebar_width == 0 {
+            self.sidebar_width = area.width / 4;
+        }
+        // Keep the sidebar within sensible bounds: at least 10 columns and at
+        // least 20 columns of space for the result grid. On very small terminals
+        // the maximum can drop below the minimum; clamp to the minimum then.
+        let sidebar_width = self
+            .sidebar_width
+            .clamp(10, area.width.saturating_sub(20).max(10));
+
         let inner = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
+            .constraints([Constraint::Length(sidebar_width), Constraint::Min(0)])
             .split(outer[0]);
 
         // Sidebar tree pane.
@@ -946,16 +963,14 @@ impl App {
             Action::OpenFile => self.open_file_finder(),
             Action::Snippets => self.open_snippets(tx),
             Action::SaveSnippet => self.begin_save_snippet(),
-            Action::WidenColumn => {
-                if self.focus == Focus::Grid {
-                    self.result_grid.widen_column();
-                }
-            }
-            Action::NarrowColumn => {
-                if self.focus == Focus::Grid {
-                    self.result_grid.narrow_column();
-                }
-            }
+            Action::WidenColumn => match self.focus {
+                Focus::Tree => self.widen_sidebar(),
+                Focus::Grid => self.result_grid.widen_column(),
+            },
+            Action::NarrowColumn => match self.focus {
+                Focus::Tree => self.narrow_sidebar(),
+                Focus::Grid => self.result_grid.narrow_column(),
+            },
             Action::AutoFitColumn => {
                 if self.focus == Focus::Grid {
                     self.result_grid.auto_fit_column();
@@ -1123,6 +1138,16 @@ impl App {
             }
             tree_pane::LineKind::Column { .. } | tree_pane::LineKind::Detail => {}
         }
+    }
+
+    /// Increase the sidebar width by a fixed step.
+    fn widen_sidebar(&mut self) {
+        self.sidebar_width = self.sidebar_width.saturating_add(5);
+    }
+
+    /// Decrease the sidebar width by a fixed step, keeping a minimum width.
+    fn narrow_sidebar(&mut self) {
+        self.sidebar_width = self.sidebar_width.saturating_sub(5).max(10);
     }
 
     fn start_connection(&mut self, name: &str, conn_idx: usize, tx: &UnboundedSender<AppMsg>) {
@@ -3254,6 +3279,97 @@ mod tests {
             "expected border at col 9, got: {}",
             border_cell.symbol()
         );
+    }
+
+    #[test]
+    fn sidebar_widens_and_narrows_when_tree_focused() {
+        let mut app = test_app();
+        assert!(matches!(app.focus, Focus::Tree));
+
+        // Render once to initialize the default sidebar width from the
+        // terminal size (40 cols → 10 cols).
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        assert_eq!(app.sidebar_width, 10);
+
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('>'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.sidebar_width, 15, "> should widen sidebar by 5 cols");
+
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('<'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.sidebar_width, 10, "< should narrow sidebar by 5 cols");
+    }
+
+    #[test]
+    fn sidebar_resize_does_not_affect_grid_columns() {
+        let mut app = test_app();
+        app.focus = Focus::Grid;
+
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let initial = app.sidebar_width;
+
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('>'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(
+            app.sidebar_width, initial,
+            "> with grid focus should not resize sidebar"
+        );
+    }
+
+    #[test]
+    fn render_does_not_panic_on_tiny_terminal() {
+        let backend = TestBackend::new(1, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+
+        // Should not panic even when the terminal is too small for both panes.
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        assert_eq!(app.sidebar_width, 0);
+    }
+
+    #[test]
+    fn sidebar_resize_moves_border() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let border_before = find_right_border(terminal.backend().buffer(), 0).unwrap();
+        assert_eq!(border_before, 9, "initial border at col 9 for 40-wide term");
+
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('>'),
+            KeyModifiers::NONE,
+        )));
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let border_after = find_right_border(terminal.backend().buffer(), 0).unwrap();
+        assert_eq!(
+            border_after,
+            border_before + 5,
+            "border should shift right after widening"
+        );
+    }
+
+    /// Return the column index of the right border (`│`) on the given row, if any.
+    fn find_right_border(buf: &ratatui::buffer::Buffer, y: u16) -> Option<u16> {
+        for x in (0..buf.area.width).rev() {
+            let sym = buf[(x, y)].symbol();
+            if sym == "│" || sym == "┤" || sym == "┐" || sym == "┘" {
+                return Some(x);
+            }
+        }
+        None
     }
 
     #[test]

@@ -39,12 +39,13 @@ names on purpose; this mapping is per-implementation and lives here.
 | 22 | Copia rápida de celda individual | **UNIT** | widget `result_grid.rs`: `copy_current_cell_returns_text`, `copy_current_cell_without_result_fails`, `copy_current_cell_honors_pending_edit` |
 | 23 | Entrada en edición de celda del grid | **APP** | `grid_i_enters_cell_edit_mode`, `grid_enter_does_not_enter_cell_edit_mode` |
 | 24 | Cursor visible en edición de celda del grid | **UNIT** | `result_grid.rs`: `cursor_starts_at_end`, `cursor_moves_with_arrow_keys`, `typing_inserts_at_cursor`, `backspace_deletes_before_cursor`, `cursor_clamps_to_bounds`, `render_shows_high_contrast_cursor_at_character`, `render_shows_high_contrast_block_cursor_at_end` |
+| 25 | Redimensionamiento del árbol lateral | **APP** | `sidebar_widens_and_narrows_when_tree_focused`, `sidebar_resize_does_not_affect_grid_columns` |
 
 ## Resumen
 
 - **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15, 17, 19**.
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
-  **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22, 23**.
+  **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22, 23, 25**.
 - **Huecos reales**: ninguno pendiente.
 
 ## Qué NO pueden cubrir los tests (verificación manual recurrente)

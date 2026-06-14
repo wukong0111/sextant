@@ -672,6 +672,12 @@ concreto vive en cada implementación.
   colores invertidos o un bloque claro/oscuro al final del texto), de modo que siempre es visible
   dónde se insertará el siguiente carácter
 
+**Redimensionamiento del árbol lateral**
+- *Given* el foco está en el árbol lateral
+- *When* se pulsa `>` (ensanchar) o `<` (estrechar)
+- *Then* el ancho del panel del árbol aumenta o disminuye de forma visible
+- *And* cuando el foco está en la rejilla, esas mismas teclas siguen redimensionando la columna seleccionada
+
 ---
 
 ## 18. Rationale de las decisiones de producto
