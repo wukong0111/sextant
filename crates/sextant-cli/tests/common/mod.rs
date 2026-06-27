@@ -181,6 +181,23 @@ impl Tui {
         }
     }
 
+    /// Poll the screen until `needle` is absent, or panic with a screen dump.
+    pub fn wait_for_absent(&self, needle: &str, timeout: Duration) {
+        let start = Instant::now();
+        loop {
+            let screen = self.screen();
+            if !screen.contains(needle) {
+                return;
+            }
+            if start.elapsed() > timeout {
+                panic!(
+                    "timed out; {needle:?} still present after {timeout:?}.\n--- screen ---\n{screen}\n--------------"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Wait for the process to exit and return whether it exited successfully.
     pub fn wait_exit(&mut self, timeout: Duration) -> bool {
         let start = Instant::now();
@@ -249,6 +266,21 @@ impl Fixture {
         Fixture {
             home,
             db: Some(db),
+            driver: sextant_core::Driver::Sqlite,
+        }
+    }
+
+    /// Create a temp environment with a SQLite connection whose database file
+    /// cannot be opened (its parent directory does not exist). The connect
+    /// attempt fails at once — a hermetic, Docker-free way to drive the
+    /// `ConnectionFailed` path without sqlx's network retry/timeout.
+    pub fn sqlite_broken(conn_name: &str) -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let bad_path = home.path().join("missing").join("test.db");
+        write_sqlite_connection(home.path(), conn_name, &bad_path);
+        Fixture {
+            home,
+            db: None,
             driver: sextant_core::Driver::Sqlite,
         }
     }

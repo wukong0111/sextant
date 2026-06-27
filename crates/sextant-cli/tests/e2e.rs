@@ -534,3 +534,28 @@ fn schema_viewer_shows_columns_in_tree() {
         "sextant should exit"
     );
 }
+
+#[test]
+fn connection_error_is_dismissable_with_esc() {
+    // A SQLite connection whose database file cannot be opened fails at once
+    // and surfaces an error in the status line. Esc must clear it.
+    let fx = Fixture::sqlite_broken("e2e-down");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-down", Duration::from_secs(10));
+
+    // Activate the connection: it cannot connect, so an error surfaces.
+    tui.send(ENTER);
+    tui.wait_for("ERR:", Duration::from_secs(15));
+    tui.wait_for("failed to connect", Duration::from_secs(5));
+
+    // Esc dismisses the status-line error; it must disappear from the screen.
+    tui.esc();
+    tui.wait_for_absent("ERR:", Duration::from_secs(5));
+    tui.wait_for_absent("failed to connect", Duration::from_secs(5));
+
+    tui.send(CTRL_Q);
+    assert!(
+        tui.wait_exit(Duration::from_secs(10)),
+        "sextant should exit"
+    );
+}

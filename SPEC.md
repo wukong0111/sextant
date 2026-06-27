@@ -678,6 +678,15 @@ concreto vive en cada implementación.
 - *Then* el ancho del panel del árbol aumenta o disminuye de forma visible
 - *And* cuando el foco está en la rejilla, esas mismas teclas siguen redimensionando la columna seleccionada
 
+**Borrado del mensaje de estado (error o notificación)**
+- *Given* la línea de estado muestra un mensaje transitorio (`ERR: …` de error, o una
+  notificación de éxito) y no hay overlay, modal, selección ni modo Visual activos
+- *When* se pulsa `Esc` estando en modo Normal
+- *Then* el mensaje desaparece de la línea de estado
+- *And* mientras exista un contexto que reclame `Esc` (modal, picker, edición de
+  celda, modo Visual, selección de filas), `Esc` actúa sobre ese contexto primero;
+  el mensaje solo se borra una vez ese contexto se ha cerrado
+
 ---
 
 ## 18. Rationale de las decisiones de producto

@@ -860,6 +860,17 @@ impl App {
             return;
         }
 
+        // Esc dismisses a transient status-line message (error or success
+        // notice) once every overlay, selection, or modal context is gone.
+        if key.code == KeyCode::Esc
+            && self.mode == Mode::Normal
+            && (self.last_error.is_some() || self.last_notice.is_some())
+        {
+            self.last_error = None;
+            self.last_notice = None;
+            return;
+        }
+
         // Resolve the key through the remappable keymap; a completed chord
         // yields an Action dispatched against the current focus.
         let spec = KeySpec::from_event(key);
@@ -1342,7 +1353,12 @@ impl App {
                 {
                     self.pending_credential = None;
                 }
-                self.connection_name = Some(format!("{name}: {error}"));
+                // The error is a transient, dismissable status-line message
+                // (cleared by Esc); the connection slot keeps the bare name so
+                // the user still knows which connection they aimed at. The tree
+                // node separately carries the persistent `!` error state.
+                self.connection_name = Some(name);
+                self.last_error = Some(error);
             }
             AppMsg::QueryResult(result) => {
                 let rows = result.rows.len();
@@ -3151,6 +3167,77 @@ mod tests {
         assert!(
             text.contains("no connection"),
             "status line should show connection: {text}"
+        );
+    }
+
+    #[test]
+    fn esc_clears_status_line_error() {
+        let mut app = test_app();
+        app.last_error = Some("boom".into());
+
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+
+        assert!(
+            app.last_error.is_none(),
+            "Esc in Normal mode should dismiss the status-line error"
+        );
+        assert!(app.last_notice.is_none());
+    }
+
+    #[test]
+    fn esc_clears_status_line_notice() {
+        let mut app = test_app();
+        app.last_notice = Some("saved".into());
+
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+
+        assert!(
+            app.last_notice.is_none(),
+            "Esc in Normal mode should dismiss the status-line notice"
+        );
+        assert!(app.last_error.is_none());
+    }
+
+    #[test]
+    fn renders_error_then_esc_clears_it() {
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.last_error = Some("db down".into());
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let last_row = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(terminal.backend().buffer().area.width as usize);
+        let text: String = last_row
+            .last()
+            .unwrap()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("ERR:") && text.contains("db down"),
+            "status line should show the error: {text}"
+        );
+
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let last_row = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(terminal.backend().buffer().area.width as usize);
+        let text: String = last_row
+            .last()
+            .unwrap()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            !text.contains("ERR:"),
+            "status line should no longer show the error after Esc: {text}"
         );
     }
 
