@@ -54,6 +54,7 @@ Crate responsibilities and dependency rules live in **`ARCHITECTURE.md`** (§ Cr
 - **Rust edition 2024**. Use modern syntax where appropriate.
 - **Doc comments** in English (`//!` / `///`).
 - **Prefer minimal, explicit code.** No speculative abstractions, premature generics, or unused error variants.
+- **Prefer `let`-else over method chaining.** Use `let Some(x) = ... else { ... };` (and similar `let`-else forms) to unwrap one level at a time and keep the happy path left-aligned, instead of long `.and_then` / `.map` chains.
 - **Surgical changes only.** Don't refactor unrelated code, reformat adjacent lines, or "improve" comments you didn't touch.
 - **Clean up your own orphans.** Remove imports/variables/functions your change leaves unused. Don't remove pre-existing dead code unless asked.
 - **Every modified line must trace directly to the user's request.**
