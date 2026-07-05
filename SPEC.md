@@ -350,6 +350,7 @@ sobre el grid según el foco. El keymap es **remapeable** por el usuario:
 |--------|-------------------|-------------|
 | Quit | `Ctrl+Q` | salir |
 | FocusNext | `Tab` | alternar foco árbol/grid |
+| ToggleSidebar | `Espacio t` | ocultar / mostrar el árbol lateral |
 | ToggleEditor | `Espacio e` | abrir editor SQL |
 | OpenHistory | `Espacio h` | historial de consultas |
 | OpenRecent | `Espacio r` | ficheros recientes |
@@ -677,6 +678,17 @@ concreto vive en cada implementación.
 - *When* se pulsa `>` (ensanchar) o `<` (estrechar)
 - *Then* el ancho del panel del árbol aumenta o disminuye de forma visible
 - *And* cuando el foco está en la rejilla, esas mismas teclas siguen redimensionando la columna seleccionada
+
+**Ocultar / mostrar el árbol lateral**
+- *Given* la app en modo Normal sin overlays y el árbol lateral visible
+- *When* se ejecuta ToggleSidebar (`Espacio t`)
+- *Then* el árbol lateral desaparece y la rejilla ocupa todo el ancho disponible
+- *And* si el foco estaba en el árbol, pasa automáticamente a la rejilla (no queda
+  foco sobre un panel invisible)
+- *When* se ejecuta ToggleSidebar de nuevo
+- *Then* el árbol reaparece con su ancho anterior y la rejilla vuelve a su layout
+  partido
+- *And* FocusNext nunca mueve el foco al árbol mientras este esté oculto
 
 **Borrado del mensaje de estado (error o notificación)**
 - *Given* la línea de estado muestra un mensaje transitorio (`ERR: …` de error, o una

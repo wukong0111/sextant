@@ -21,6 +21,7 @@ use sextant_config::RawBinding;
 pub enum Action {
     Quit,
     FocusNext,
+    ToggleSidebar,
     ToggleEditor,
     OpenHistory,
     OpenRecent,
@@ -60,6 +61,7 @@ impl Action {
         Some(match name {
             "quit" => Action::Quit,
             "focus_next" => Action::FocusNext,
+            "toggle_sidebar" => Action::ToggleSidebar,
             "toggle_editor" => Action::ToggleEditor,
             "open_history" => Action::OpenHistory,
             "open_recent" => Action::OpenRecent,
@@ -100,6 +102,7 @@ impl Action {
         match self {
             Action::Quit => "quit",
             Action::FocusNext => "switch focus (tree/grid)",
+            Action::ToggleSidebar => "hide/show sidebar",
             Action::ToggleEditor => "open SQL editor",
             Action::OpenHistory => "query history",
             Action::OpenRecent => "recent files",
@@ -276,6 +279,7 @@ impl Keymap {
         let raw = [
             ("<C-q>", Action::Quit),
             ("<Tab>", Action::FocusNext),
+            ("<Space>t", Action::ToggleSidebar),
             ("<Space>e", Action::ToggleEditor),
             ("<Space>h", Action::OpenHistory),
             ("<Space>r", Action::OpenRecent),
@@ -503,6 +507,14 @@ mod tests {
         let mut state = ChordState::default();
         assert_eq!(state.feed(&map, key(' ')), None);
         assert_eq!(state.feed(&map, key('e')), Some(Action::ToggleEditor));
+    }
+
+    #[test]
+    fn leader_t_toggles_sidebar() {
+        let map = Keymap::defaults();
+        let mut state = ChordState::default();
+        assert_eq!(state.feed(&map, key(' ')), None);
+        assert_eq!(state.feed(&map, key('t')), Some(Action::ToggleSidebar));
     }
 
     #[test]

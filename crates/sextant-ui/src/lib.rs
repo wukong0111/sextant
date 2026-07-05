@@ -283,6 +283,9 @@ pub struct App {
     /// "not yet initialized" and is resolved to a percentage of the terminal
     /// width on the first render.
     sidebar_width: u16,
+    /// Whether the sidebar tree pane is shown. Toggled by ToggleSidebar
+    /// (`<Space>t`); when hidden the grid spans the full width.
+    sidebar_visible: bool,
 }
 
 impl App {
@@ -350,6 +353,7 @@ impl App {
             palette,
             needs_redraw: true,
             sidebar_width: 0,
+            sidebar_visible: true,
         })
     }
 
@@ -374,19 +378,23 @@ impl App {
             .sidebar_width
             .clamp(10, area.width.saturating_sub(20).max(10));
 
-        let inner = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(sidebar_width), Constraint::Min(0)])
-            .split(outer[0]);
-
-        // Sidebar tree pane.
-        self.tree.render(frame, inner[0]);
+        let grid_area = if self.sidebar_visible {
+            let inner = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(sidebar_width), Constraint::Min(0)])
+                .split(outer[0]);
+            // Sidebar tree pane.
+            self.tree.render(frame, inner[0]);
+            inner[1]
+        } else {
+            outer[0]
+        };
 
         // Main area: result grid.
         if self.result_grid.result() != &self.last_result {
             self.result_grid.set_result(self.last_result.clone());
         }
-        self.result_grid.render(frame, inner[1]);
+        self.result_grid.render(frame, grid_area);
 
         // Editor modal (floating overlay).
         if self.editor_open {
@@ -921,8 +929,21 @@ impl App {
             Action::FocusNext => {
                 self.focus = match self.focus {
                     Focus::Tree => Focus::Grid,
-                    Focus::Grid => Focus::Tree,
+                    Focus::Grid => {
+                        if self.sidebar_visible {
+                            Focus::Tree
+                        } else {
+                            Focus::Grid
+                        }
+                    }
                 };
+            }
+            Action::ToggleSidebar => {
+                self.sidebar_visible = !self.sidebar_visible;
+                // Never leave focus on an invisible pane.
+                if !self.sidebar_visible && self.focus == Focus::Tree {
+                    self.focus = Focus::Grid;
+                }
             }
             Action::ToggleEditor => self.open_editor(),
             Action::OpenHistory => self.open_history(tx),
@@ -3493,6 +3514,105 @@ mod tests {
             border_after,
             border_before + 5,
             "border should shift right after widening"
+        );
+    }
+
+    #[test]
+    fn space_t_hides_and_shows_sidebar() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        assert!(app.sidebar_visible, "sidebar starts visible");
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let border_cell = &terminal.backend().buffer()[(9, 0)];
+        assert!(
+            border_cell.symbol() == "│"
+                || border_cell.symbol() == "┐"
+                || border_cell.symbol() == "┘"
+                || border_cell.symbol() == "┤",
+            "sidebar border should be present at col 9 when visible"
+        );
+
+        // <Space>t hides the sidebar.
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.sidebar_visible, "<Space>t should hide the sidebar");
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let cell = terminal.backend().buffer()[(9, 0)].symbol();
+        assert!(
+            !(cell == "│" || cell == "┐" || cell == "┘" || cell == "┤"),
+            "no sidebar border at col 9 when hidden, got: {cell}"
+        );
+
+        // <Space>t again restores it with its previous width.
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::NONE,
+        )));
+        assert!(
+            app.sidebar_visible,
+            "<Space>t should show the sidebar again"
+        );
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let restored = terminal.backend().buffer()[(9, 0)].symbol();
+        assert!(
+            restored == "│" || restored == "┐" || restored == "┘" || restored == "┤",
+            "sidebar border should be back at col 9 when shown, got: {restored}"
+        );
+    }
+
+    #[test]
+    fn hiding_sidebar_moves_focus_to_grid() {
+        let mut app = test_app();
+        assert!(matches!(app.focus, Focus::Tree));
+
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.sidebar_visible);
+        assert!(
+            matches!(app.focus, Focus::Grid),
+            "hiding the sidebar while focused on it must move focus to the grid"
+        );
+    }
+
+    #[test]
+    fn focus_next_does_not_enter_hidden_sidebar() {
+        let mut app = test_app();
+        // Hide the sidebar first.
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::NONE,
+        )));
+        assert!(matches!(app.focus, Focus::Grid));
+
+        // Tab must not move focus to the hidden tree.
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        assert!(
+            matches!(app.focus, Focus::Grid),
+            "FocusNext must stay on the grid while the sidebar is hidden"
         );
     }
 

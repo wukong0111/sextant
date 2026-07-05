@@ -42,12 +42,13 @@ names on purpose; this mapping is per-implementation and lives here.
 | 25 | Redimensionamiento del árbol lateral | **APP** | `sidebar_widens_and_narrows_when_tree_focused`, `sidebar_resize_does_not_affect_grid_columns` |
 | 26 | Borrado del mensaje de estado (error o notificación) | **E2E+APP** | e2e: `connection_error_is_dismissable_with_esc`; app: `esc_clears_status_line_error`, `esc_clears_status_line_notice`, `renders_error_then_esc_clears_it` |
 | 27 | Desplazamiento del overlay de ayuda | **APP** | `help_overlay_toggles_with_leader_question_and_any_key`, `help_overlay_scrolls_with_j_k_and_closes_with_q` |
+| 28 | Ocultar / mostrar el árbol lateral | **APP+UNIT** | unit `keymap.rs`: `leader_t_toggles_sidebar`; app: `space_t_hides_and_shows_sidebar`, `hiding_sidebar_moves_focus_to_grid`, `focus_next_does_not_enter_hidden_sidebar` |
 
 ## Resumen
 
 - **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15, 17, 19, 26**. SQLite siempre; PostgreSQL y MySQL cuando Docker está disponible (`e2e_drivers.rs`).
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
-  **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22, 23, 25, 26, 27**.
+  **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22, 23, 25, 26, 27, 28**.
 - **Huecos reales**: ninguno pendiente.
 
 ## Qué NO pueden cubrir los tests (verificación manual recurrente)
