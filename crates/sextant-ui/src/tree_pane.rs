@@ -607,7 +607,7 @@ mod tests {
             0,
             0,
             0,
-            vec!["⚿ idx_users_email (email)".into()],
+            vec!["# idx_users_email (email)".into()],
             vec!["→ org_id → orgs(id)".into()],
         );
         assert!(tree.table_detail_loaded(0, 0, 0));

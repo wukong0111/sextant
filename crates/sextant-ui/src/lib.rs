@@ -1383,7 +1383,7 @@ impl App {
                     .iter()
                     .map(|i| {
                         let unique = if i.unique { " UNIQUE" } else { "" };
-                        format!("⚿ {} ({}){}", i.name, i.columns.join(", "), unique)
+                        format!("# {} ({}){}", i.name, i.columns.join(", "), unique)
                     })
                     .collect();
                 let foreign_keys = detail
