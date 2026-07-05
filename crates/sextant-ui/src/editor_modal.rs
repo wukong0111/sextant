@@ -154,7 +154,10 @@ impl EditorModal {
     }
 
     /// Render the modal centered over the given full-screen area.
-    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
+    ///
+    /// `mode` drives cursor visibility: a high-contrast block cursor marks the
+    /// insertion point only in Insert mode.
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, mode: super::Mode) {
         let modal_area = centered_rect(80, 60, area);
         frame.render_widget(Clear, modal_area);
 
@@ -198,7 +201,14 @@ impl EditorModal {
                 .border_style(Style::default().fg(p.accent)),
         );
         textarea.set_style(Style::default().fg(p.foreground).bg(p.background));
-        textarea.set_cursor_style(Style::default().fg(p.accent_alt));
+        // A high-contrast block cursor marks the insertion point only while the
+        // editor is in Insert mode; Normal/Visual leave the cell unstyled.
+        let cursor_style = if mode == super::Mode::Insert {
+            Style::default().fg(p.background).bg(p.accent_alt)
+        } else {
+            Style::default()
+        };
+        textarea.set_cursor_style(cursor_style);
         frame.render_widget(&self.buffers[self.active].textarea, editor_area);
         self.render_completion(frame, editor_area, area);
     }
@@ -816,5 +826,52 @@ mod tests {
         editor.new_buffer();
         assert!(!editor.is_dirty());
         assert!(editor.buffers[0].dirty);
+    }
+
+    fn render_buffer(
+        editor: &mut EditorModal,
+        mode: super::super::Mode,
+    ) -> ratatui::buffer::Buffer {
+        use ratatui::{Terminal, backend::TestBackend};
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| editor.render(frame, frame.area(), mode))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn render_insert_mode_shows_block_cursor() {
+        let mut editor = EditorModal::new();
+        let p = self::Palette::default();
+        let buf = render_buffer(&mut editor, super::super::Mode::Insert);
+
+        let cursor_cells: Vec<_> = buf
+            .content
+            .iter()
+            .filter(|c| c.fg == ratatui::style::Color::Black && c.bg == p.accent_alt)
+            .collect();
+        assert!(
+            !cursor_cells.is_empty(),
+            "expected a visible block cursor in insert mode"
+        );
+    }
+
+    #[test]
+    fn render_normal_mode_hides_block_cursor() {
+        let mut editor = EditorModal::new();
+        let p = self::Palette::default();
+        let buf = render_buffer(&mut editor, super::super::Mode::Normal);
+
+        let cursor_cells: Vec<_> = buf
+            .content
+            .iter()
+            .filter(|c| c.fg == ratatui::style::Color::Black && c.bg == p.accent_alt)
+            .collect();
+        assert!(
+            cursor_cells.is_empty(),
+            "no block cursor should be drawn outside insert mode"
+        );
     }
 }

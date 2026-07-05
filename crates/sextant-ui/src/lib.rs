@@ -390,7 +390,7 @@ impl App {
 
         // Editor modal (floating overlay).
         if self.editor_open {
-            self.editor.render(frame, area);
+            self.editor.render(frame, area, self.mode);
         }
 
         // Commit-confirmation modal (floating overlay).
