@@ -53,6 +53,9 @@ fn styled_textarea(lines: Vec<String>) -> TextArea<'static> {
             .border_style(Style::default().fg(Color::Cyan)),
     );
     textarea.set_style(Style::default().fg(Color::White).bg(Color::Black));
+    // tui-textarea underlines the cursor line by default; the editor renders a
+    // block cursor instead, so drop the underline to avoid noisy text.
+    textarea.set_cursor_line_style(Style::default());
     textarea.set_cursor_style(Style::default().fg(Color::Yellow));
     textarea
 }
@@ -873,5 +876,19 @@ mod tests {
             cursor_cells.is_empty(),
             "no block cursor should be drawn outside insert mode"
         );
+    }
+
+    #[test]
+    fn render_does_not_underline_cursor_line() {
+        let mut editor = EditorModal::new();
+        editor.set_content("SELECT 1");
+        let buf = render_buffer(&mut editor, super::super::Mode::Insert);
+
+        let underlined: Vec<_> = buf
+            .content
+            .iter()
+            .filter(|c| c.modifier.contains(ratatui::style::Modifier::UNDERLINED))
+            .collect();
+        assert!(underlined.is_empty(), "editor text must not be underlined");
     }
 }
