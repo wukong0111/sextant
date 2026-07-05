@@ -16,13 +16,16 @@ help: ## Show this help
 
 check: ## Full verification: compile, test, fmt check, clippy
 	cargo check --workspace
-	cargo test --workspace
+	cargo test --workspace --lib
+	cargo test -p sextant-cli --tests -- --test-threads=1
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets
 
-e2e: ## Run the PTY end-to-end tests (SQLite always; PG/MySQL when Docker is available)
-	cargo test -p sextant-cli --test e2e
-	cargo test -p sextant-cli --test e2e_drivers
+# The PTY-based e2e tests spawn the real binary per test and time out under
+# `Tui::wait_for` when run in parallel, so run them serialized (--test-threads=1).
+e2e: ## Run the PTY end-to-end tests, serialized (SQLite always; PG/MySQL with Docker)
+	cargo test -p sextant-cli --test e2e -- --test-threads=1
+	cargo test -p sextant-cli --test e2e_drivers -- --test-threads=1
 
 smoke: ## Print live "screenshots" of the running TUI (manual, no TTY needed)
 	cargo test -p sextant-cli --test smoke -- --ignored --nocapture
