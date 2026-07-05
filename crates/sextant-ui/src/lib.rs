@@ -2847,6 +2847,13 @@ fn render_help_overlay(
     scroll: &mut u16,
 ) {
     let mut lines: Vec<Line> = Vec::new();
+    // Scroll hint at the top so it stays visible when the overlay opens
+    // already taller than the terminal (a bottom hint would be off-screen).
+    lines.push(Line::from(Span::styled(
+        "j/k scroll · Esc/q close",
+        Style::default().fg(p.muted),
+    )));
+    lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Normal mode",
         Style::default().fg(p.accent),
@@ -2876,11 +2883,6 @@ fn render_help_overlay(
             Span::styled(desc.to_string(), Style::default().fg(p.foreground)),
         ]));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "j/k scroll · Esc/q close",
-        Style::default().fg(p.muted),
-    )));
 
     let width = (area.width as f32 * 0.6).clamp(30.0, 70.0) as u16;
     let height = (lines.len() as u16 + 2).min(area.height.max(3));
