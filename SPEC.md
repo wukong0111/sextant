@@ -687,6 +687,14 @@ concreto vive en cada implementación.
   celda, modo Visual, selección de filas), `Esc` actúa sobre ese contexto primero;
   el mensaje solo se borra una vez ese contexto se ha cerrado
 
+**Desplazamiento del overlay de ayuda**
+- *Given* el overlay de ayuda abierto (`Espacio ?`) y contenido que excede el
+  alto disponible
+- *When* se pulsa `j`/`↓`, `k`/`↑`, `PgDown`/`PgUp`, o `g`/`G` (ir arriba/abajo)
+- *Then* el contenido se desplaza dentro del overlay sin truncarlo
+- *And* `Esc` o `q` cierran el overlay; cualquier otra tecla también lo cierra
+- *And* al reabrirse, el scroll vuelve a la parte superior
+
 ---
 
 ## 18. Rationale de las decisiones de producto

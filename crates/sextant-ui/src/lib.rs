@@ -238,6 +238,9 @@ pub struct App {
     pending_dangerous: Option<DangerousStmt>,
     /// Whether the help overlay (cheatsheet) is showing.
     show_help: bool,
+    /// Vertical scroll offset of the help overlay, in lines. Clamped to the
+    /// available content during render.
+    help_scroll: u16,
     /// Active fuzzy picker (command palette / find table / open file), if any.
     fuzzy: Option<FuzzyPicker>,
     /// Snippet-name prompt (saving the current buffer as a snippet), if active.
@@ -324,6 +327,7 @@ impl App {
             pending_import: None,
             pending_dangerous: None,
             show_help: false,
+            help_scroll: 0,
             fuzzy: None,
             snippet_prompt: None,
             password_prompt: None,
@@ -446,7 +450,13 @@ impl App {
 
         // Help overlay.
         if self.show_help {
-            render_help_overlay(frame, area, &self.keymap, self.palette);
+            render_help_overlay(
+                frame,
+                area,
+                &self.keymap,
+                self.palette,
+                &mut self.help_scroll,
+            );
         }
 
         // Crash-recovery prompt (highest priority overlay).
@@ -611,9 +621,28 @@ impl App {
 
         tracing::debug!("key: {:?}, modifiers: {:?}", key.code, key.modifiers);
 
-        // Help overlay swallows keys until dismissed.
+        // Help overlay: navigation keys scroll, the rest (incl. Esc/q) close it.
         if self.show_help {
-            self.show_help = false;
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.help_scroll = self.help_scroll.saturating_add(1);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1);
+                }
+                KeyCode::PageDown => {
+                    self.help_scroll = self.help_scroll.saturating_add(8);
+                }
+                KeyCode::PageUp => {
+                    self.help_scroll = self.help_scroll.saturating_sub(8);
+                }
+                KeyCode::Char('g') => self.help_scroll = 0,
+                KeyCode::Char('G') => self.help_scroll = u16::MAX,
+                _ => {
+                    self.show_help = false;
+                    self.help_scroll = 0;
+                }
+            }
             return;
         }
 
@@ -968,7 +997,10 @@ impl App {
                     self.emit_table_ddl();
                 }
             }
-            Action::Help => self.show_help = true,
+            Action::Help => {
+                self.show_help = true;
+                self.help_scroll = 0;
+            }
             Action::CommandPalette => self.open_command_palette(),
             Action::FindTable => self.open_table_finder(),
             Action::OpenFile => self.open_file_finder(),
@@ -2807,7 +2839,13 @@ fn render_fuzzy_picker(frame: &mut Frame, area: Rect, fuzzy: &FuzzyPicker, p: Pa
 
 /// Render the help overlay: a cheatsheet built dynamically from the keymap,
 /// plus a static section for editor/modal keys not in the remappable map.
-fn render_help_overlay(frame: &mut Frame, area: Rect, keymap: &Keymap, p: Palette) {
+fn render_help_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    keymap: &Keymap,
+    p: Palette,
+    scroll: &mut u16,
+) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
         "Normal mode",
@@ -2840,7 +2878,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, keymap: &Keymap, p: Palett
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "press any key to close",
+        "j/k scroll · Esc/q close",
         Style::default().fg(p.muted),
     )));
 
@@ -2854,9 +2892,17 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, keymap: &Keymap, p: Palett
         width,
         height,
     };
+
+    // Clamp the scroll offset to what can actually be shown: the content
+    // height minus the inner rows (borders eat 2 lines). This keeps `G`
+    // (set to u16::MAX) and overshooting PgDown aligned to the last line.
+    let inner_h = rect.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(inner_h);
+    *scroll = (*scroll).min(max_scroll as u16);
+
     frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(lines).block(
+        Paragraph::new(lines).scroll((*scroll, 0)).block(
             Block::default()
                 .title(" Help ")
                 .borders(Borders::ALL)
@@ -3606,11 +3652,64 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(app.show_help, "<Space>? should open help");
+        // A non-navigation key closes the overlay (scroll keys j/k do not).
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.show_help, "any non-scroll key should close help");
+    }
+
+    #[test]
+    fn help_overlay_scrolls_with_j_k_and_closes_with_q() {
+        let mut app = test_app();
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('?'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.help_scroll, 0, "help should open scrolled to top");
+
+        // j scrolls down, does not close.
         app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
             KeyCode::Char('j'),
             KeyModifiers::NONE,
         )));
-        assert!(!app.show_help, "any key should close help");
+        assert!(app.show_help, "j should scroll, not close");
+        assert!(app.help_scroll > 0, "j should advance the scroll offset");
+
+        // k scrolls back up.
+        let prev = app.help_scroll;
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('k'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.help_scroll < prev, "k should rewind the scroll offset");
+
+        // Re-opening resets scroll to the top.
+        app.help_scroll = u16::MAX;
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('?'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(
+            app.help_scroll, 0,
+            "re-opening help should reset the scroll offset"
+        );
+
+        // q closes.
+        app.handle_event(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.show_help, "q should close help");
     }
 
     #[test]
