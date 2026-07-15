@@ -254,6 +254,15 @@ filas** en lugar de sobrescribir o borrar cambios ajenos. *(Limitación de
 producto conocida: hoy el conflicto se manifiesta como "0 filas afectadas" — la
 fila no cambia tras refrescar — sin un mensaje de error explícito.)*
 
+### 7.6 Numeración de filas
+
+La rejilla muestra una columna inicial **no editable**, con cabecera `#`, que
+numera las filas visibles empezando en `1`. La numeración cubre todas las filas
+mostradas, incluidas las añadidas pendientes y las marcadas para borrado. No
+participa en la navegación de la celda activa, en la selección, en la copia ni
+en el commit: es puramente visual y no desplaza la semántica de `cursor_col`,
+que sigue indexando las columnas de datos.
+
 ---
 
 ## 8. Operaciones destructivas
@@ -706,6 +715,16 @@ concreto vive en cada implementación.
 - *Then* el contenido se desplaza dentro del overlay sin truncarlo
 - *And* `Esc` o `q` cierran el overlay; cualquier otra tecla también lo cierra
 - *And* al reabrirse, el scroll vuelve a la parte superior
+
+**Numeración de filas del grid**
+- *Given* un grid con resultados visibles
+- *When* se renderiza la rejilla
+- *Then* aparece una columna inicial, con cabecera `#`, que numera las filas
+  empezando en `1`
+- *And* esa columna no recibe la celda activa, no participa en la selección, la
+  copia ni el commit (es solo visual)
+- *And* la numeración incluye las filas añadidas pendientes y las marcadas para
+  borrado
 
 ---
 

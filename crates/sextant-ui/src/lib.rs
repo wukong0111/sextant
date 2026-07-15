@@ -4391,15 +4391,18 @@ mod tests {
 
         let buf = terminal.backend().buffer();
         // Find the cell that contains "1" (first row, first col = active cell).
-        // With our layout, the grid starts at col 10 (sidebar is 25% of 40 = 10 cols).
-        // Row 0 is the first data row after the header.
-        // Header is row 0, first data row is row 1.
-        // Let's find the position of "1" in the buffer.
-        let mut found_one = false;
-        // The grid starts after the sidebar (25% of width = 10 cols for 40-wide).
+        // With our layout, the grid starts after the sidebar (25% of width = 10
+        // cols for 40-wide). A fixed row-number gutter (width = digits of the
+        // row count) plus a 1-cell gap precede the first data column, so the
+        // search must skip them to land on the data "1", not the gutter number.
         let sidebar_width = (buf.area.width as f32 * 0.25) as u16;
+        let row_count = app.last_result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
+        let gutter = row_count.to_string().len().max(1) as u16;
+        let data_start = sidebar_width + gutter + 1;
+        let mut found_one = false;
+        // Header is row 0, first data row is row 1.
         for y in 0..buf.area.height {
-            for x in sidebar_width..buf.area.width {
+            for x in data_start..buf.area.width {
                 if buf[(x, y)].symbol() == "1" {
                     let style = buf[(x, y)].style();
                     assert_eq!(

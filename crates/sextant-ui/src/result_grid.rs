@@ -881,9 +881,14 @@ impl ResultGrid {
         let widths = compute_column_widths(result, &self.column_widths);
         let existing = result.rows.len();
 
+        // Leading non-interactive gutter that numbers the visible rows (1-based).
+        let gutter_width = self.total_rows().to_string().len().max(1) as u16;
+
         // Horizontal scroll: derive the first visible column each frame so the
-        // selected cell stays on screen on tables wider than the viewport.
-        let offset = first_visible_column(&widths, self.cursor_col, area.width, 1);
+        // selected cell stays on screen on tables wider than the viewport. The
+        // gutter reserves space on the left, so only the remainder is available.
+        let avail_width = area.width.saturating_sub(gutter_width + 1);
+        let offset = first_visible_column(&widths, self.cursor_col, avail_width, 1);
 
         // Paint the background first so empty areas are filled.
         frame.render_widget(
@@ -893,7 +898,29 @@ impl ResultGrid {
             area,
         );
 
-        let mut x = area.x;
+        // Paint the fixed row-number gutter before the (scrollable) data columns.
+        let gutter_style = Style::default().fg(p.muted);
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new("#")
+                .alignment(ratatui::layout::Alignment::Right)
+                .style(gutter_style),
+            Rect::new(area.x, area.y, gutter_width, 1),
+        );
+        let total = self.total_rows();
+        for row_idx in 0..total {
+            let row_y = area.y + 1 + row_idx as u16;
+            if row_y >= area.y + area.height {
+                break;
+            }
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(format!("{}", row_idx + 1))
+                    .alignment(ratatui::layout::Alignment::Right)
+                    .style(gutter_style),
+                Rect::new(area.x, row_y, gutter_width, 1),
+            );
+        }
+
+        let mut x = area.x + gutter_width + 1;
         for (col_idx, col) in result.columns.iter().enumerate().skip(offset) {
             let col_width = widths[col_idx] as u16;
 
@@ -1212,6 +1239,69 @@ mod tests {
         );
         assert!(text.contains("Alice"), "row should contain 'Alice': {text}");
         assert!(text.contains("Bob"), "row should contain 'Bob': {text}");
+    }
+
+    #[test]
+    fn grid_renders_row_number_column() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(sample_result()));
+
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let w = buf.area.width as usize;
+        // Header row y=0; data rows start at y=1.
+        let header: String = (0..w).map(|x| buf[(x as u16, 0)].symbol()).collect();
+        assert!(
+            header.starts_with('#'),
+            "header should start with '#': {header:?}"
+        );
+        let row0: String = (0..w).map(|x| buf[(x as u16, 1)].symbol()).collect();
+        assert!(
+            row0.starts_with('1'),
+            "first data row should start with '1': {row0:?}"
+        );
+        let row1: String = (0..w).map(|x| buf[(x as u16, 2)].symbol()).collect();
+        assert!(
+            row1.starts_with('2'),
+            "second data row should start with '2': {row1:?}"
+        );
+    }
+
+    #[test]
+    fn row_number_column_counts_new_rows() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut grid = editable_grid();
+        grid.add_row(); // total_rows() is now 3
+
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let w = buf.area.width as usize;
+        // The appended row is at index 2, rendered at y=3, and must be numbered "3".
+        let new_row: String = (0..w).map(|x| buf[(x as u16, 3)].symbol()).collect();
+        assert!(
+            new_row.starts_with('3'),
+            "appended row should be numbered '3': {new_row:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_cannot_enter_row_number_column() {
+        let mut grid = editable_grid();
+        grid.cursor_col = 0;
+        grid.move_left();
+        assert_eq!(
+            grid.cursor_col, 0,
+            "cursor_col must not go below 0 into the gutter"
+        );
     }
 
     #[test]
