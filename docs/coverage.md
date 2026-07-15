@@ -44,12 +44,13 @@ names on purpose; this mapping is per-implementation and lives here.
 | 27 | Desplazamiento del overlay de ayuda | **APP** | `help_overlay_toggles_with_leader_question_and_any_key`, `help_overlay_scrolls_with_j_k_and_closes_with_q` |
 | 28 | Ocultar / mostrar el árbol lateral | **APP+UNIT** | unit `keymap.rs`: `leader_t_toggles_sidebar`; app: `space_t_hides_and_shows_sidebar`, `hiding_sidebar_moves_focus_to_grid`, `focus_next_does_not_enter_hidden_sidebar` |
 | 29 | Numeración de filas del grid | **UNIT** | widget `result_grid.rs`: `grid_renders_row_number_column`, `row_number_column_counts_new_rows`, `cursor_cannot_enter_row_number_column` |
+| 30 | Navegación vertical del grid | **UNIT** | widget `result_grid.rs`: `first_visible_row_no_scroll_when_all_fit`, `first_visible_row_scrolls_to_show_cursor`, `grid_scrolls_vertically_to_keep_cursor_visible` |
 
 ## Resumen
 
 - **PTY end-to-end**: escenarios **1, 2, 3, 4, 10, 11, 14, 15, 17, 19, 26**. SQLite siempre; PostgreSQL y MySQL cuando Docker está disponible (`e2e_drivers.rs`).
 - **Verificados a nivel app/unit** (comportamiento integrado, sin TTY real):
-  **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22, 23, 25, 26, 27, 28, 29**.
+  **5, 6, 7, 8, 9, 12, 16, 18, 20, 21, 22, 23, 25, 26, 27, 28, 29, 30**.
 - **Huecos reales**: ninguno pendiente.
 
 ## Qué NO pueden cubrir los tests (verificación manual recurrente)

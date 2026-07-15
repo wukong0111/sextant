@@ -532,6 +532,13 @@ concreto vive en cada implementación.
 - *Then* la rejilla se desplaza horizontalmente y la columna seleccionada queda
   visible
 
+**Navegación vertical del grid**
+- *Given* un grid con más filas de las que caben en pantalla
+- *When* se mueve la selección con Down hacia una fila por debajo de la ventana
+  visible
+- *Then* la rejilla se desplaza verticalmente y la fila seleccionada queda
+  visible (análogo al desplazamiento horizontal)
+
 **Redimensionamiento de columnas del grid**
 - *Given* un grid con resultados visibles y el foco en el grid
 - *When* se ejecuta WidenColumn o NarrowColumn sobre la columna seleccionada

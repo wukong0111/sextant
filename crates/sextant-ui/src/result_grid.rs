@@ -890,6 +890,12 @@ impl ResultGrid {
         let avail_width = area.width.saturating_sub(gutter_width + 1);
         let offset = first_visible_column(&widths, self.cursor_col, avail_width, 1);
 
+        // Vertical scroll: the header occupies one line, so the data window is
+        // `area.height - 1` rows. Derive the top row each frame (stateless, like
+        // the horizontal case) so the selected row never leaves the viewport.
+        let visible_rows = (area.height as usize).saturating_sub(1);
+        let row_offset = first_visible_row(self.cursor_row, visible_rows);
+
         // Paint the background first so empty areas are filled.
         frame.render_widget(
             Block::default()
@@ -907,8 +913,9 @@ impl ResultGrid {
             Rect::new(area.x, area.y, gutter_width, 1),
         );
         let total = self.total_rows();
-        for row_idx in 0..total {
-            let row_y = area.y + 1 + row_idx as u16;
+        for row_idx in row_offset..total {
+            let view_idx = row_idx - row_offset;
+            let row_y = area.y + 1 + view_idx as u16;
             if row_y >= area.y + area.height {
                 break;
             }
@@ -950,8 +957,9 @@ impl ResultGrid {
             );
 
             // Data cells.
-            for row_idx in 0..self.total_rows() {
-                let row_y = area.y + 1 + row_idx as u16;
+            for row_idx in row_offset..self.total_rows() {
+                let view_idx = row_idx - row_offset;
+                let row_y = area.y + 1 + view_idx as u16;
                 if row_y >= area.y + area.height {
                     break;
                 }
@@ -1146,6 +1154,14 @@ fn first_visible_column(
         offset += 1;
     }
     offset
+}
+
+/// Smallest top-anchored row offset such that rows `offset..=cursor_row` fit in
+/// `visible_rows` data lines. Mirrors `first_visible_column` but for uniform
+/// 1-line-tall rows: keeps the maximum number of leading rows visible while
+/// guaranteeing the cursor row stays on screen.
+fn first_visible_row(cursor_row: usize, visible_rows: usize) -> usize {
+    cursor_row.saturating_sub(visible_rows.saturating_sub(1))
 }
 
 /// Number of columns that fit in `area_width` starting from `offset`.
@@ -1380,6 +1396,70 @@ mod tests {
         assert!(
             !text.contains("alpha"),
             "first column should have scrolled out of view: {text}"
+        );
+    }
+
+    #[test]
+    fn first_visible_row_no_scroll_when_all_fit() {
+        // Viewport tall enough to show every row never scrolls.
+        assert_eq!(first_visible_row(0, 10), 0);
+        assert_eq!(first_visible_row(4, 10), 0);
+    }
+
+    #[test]
+    fn first_visible_row_scrolls_to_show_cursor() {
+        // 5 visible rows; cursor at row 7 must scroll so it sits at the bottom.
+        let offset = first_visible_row(7, 5);
+        assert_eq!(
+            offset, 3,
+            "cursor 7 with 5 visible rows → offset 3 (rows 3..=7)"
+        );
+        // One row above must not scroll past the cursor.
+        assert_eq!(
+            first_visible_row(4, 5),
+            0,
+            "cursor 4 still fits from the top"
+        );
+    }
+
+    #[test]
+    fn grid_scrolls_vertically_to_keep_cursor_visible() {
+        // A tall result: 6 rows, viewport 3 lines (1 header + 2 data rows).
+        let result = QueryResult {
+            columns: vec![Column {
+                name: "v".into(),
+                type_name: "text".into(),
+            }],
+            rows: (0..6)
+                .map(|i| vec![CellValue::String(format!("row{i}"))])
+                .collect(),
+            rows_affected: None,
+        };
+
+        let backend = TestBackend::new(20, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut grid = ResultGrid::new();
+        grid.set_result(Some(result));
+        grid.cursor_row = 4; // beyond the 2 visible data rows
+
+        terminal
+            .draw(|frame| grid.render(frame, frame.area()))
+            .unwrap();
+
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("row4"),
+            "selected row 4 should be visible: {text}"
+        );
+        assert!(
+            !text.contains("row0"),
+            "top row should have scrolled out of view: {text}"
         );
     }
 
