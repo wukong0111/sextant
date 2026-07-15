@@ -53,6 +53,7 @@ pub enum Action {
     EnterVisualMode,
     Copy,
     ToggleRowSelection,
+    ExtendRowSelection,
 }
 
 impl Action {
@@ -93,6 +94,7 @@ impl Action {
             "enter_visual_mode" => Action::EnterVisualMode,
             "copy" => Action::Copy,
             "toggle_row_selection" => Action::ToggleRowSelection,
+            "extend_row_selection" => Action::ExtendRowSelection,
             _ => return None,
         })
     }
@@ -134,6 +136,7 @@ impl Action {
             Action::EnterVisualMode => "enter visual mode (grid selection)",
             Action::Copy => "copy cell or selection",
             Action::ToggleRowSelection => "toggle row selection (grid)",
+            Action::ExtendRowSelection => "extend row selection to cursor (grid)",
         }
     }
 }
@@ -310,6 +313,7 @@ impl Keymap {
             ("<Space>W", Action::AutoFitAll),
             ("v", Action::EnterVisualMode),
             ("x", Action::ToggleRowSelection),
+            ("X", Action::ExtendRowSelection),
             ("y", Action::Copy),
         ];
         let mut map = Self {
@@ -515,6 +519,13 @@ mod tests {
         let mut state = ChordState::default();
         assert_eq!(state.feed(&map, key(' ')), None);
         assert_eq!(state.feed(&map, key('t')), Some(Action::ToggleSidebar));
+    }
+
+    #[test]
+    fn shift_x_extends_row_selection() {
+        let map = Keymap::defaults();
+        let mut state = ChordState::default();
+        assert_eq!(state.feed(&map, key('X')), Some(Action::ExtendRowSelection));
     }
 
     #[test]

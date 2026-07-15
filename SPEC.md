@@ -672,6 +672,12 @@ concreto vive en cada implementación.
   formato y aparece una notificación transitoria
 - *When* se pulsa `d` teniendo filas seleccionadas en un grid editable
 - *Then* todas las filas seleccionadas se marcan para borrado
+- *When* existe una fila seleccionada (el ancla es la última fila seleccionada
+  con `x`), se mueve el cursor a otra fila y se pulsa `X` (extender selección)
+- *Then* se seleccionan todas las filas del rango entre el ancla y la posición
+  del cursor (inclusive), sumándose a las ya seleccionadas
+- *And* si no hay ancla (ninguna fila seleccionada con `x` antes), `X` no hace
+  nada
 
 **Copia rápida de celda individual**
 - *Given* el foco está en el grid, hay resultados visibles, no hay modo Visual activo y no hay

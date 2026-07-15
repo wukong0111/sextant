@@ -130,6 +130,10 @@ pub struct ResultGrid {
     selection_active: bool,
     /// Rows selected for full-row operations (toggle with `x`).
     selected_rows: BTreeSet<usize>,
+    /// Pivot row for range extension via `X` (`ExtendRowSelection`): the most
+    /// recent row selected with `toggle_row_selection`. Cleared together with
+    /// `selected_rows`.
+    row_selection_anchor: Option<usize>,
 }
 
 impl ResultGrid {
@@ -153,7 +157,7 @@ impl ResultGrid {
         self.cursor_col = 0;
         self.clear_pending();
         self.clear_selection();
-        self.selected_rows.clear();
+        self.clear_row_selection();
         self.column_widths.clear();
     }
 
@@ -217,19 +221,37 @@ impl ResultGrid {
         Some((min_row, min_col, max_row, max_col))
     }
 
-    /// Toggle selection of the given full row.
+    /// Toggle selection of the given full row. Selecting a row updates the
+    /// range-extension anchor used by `extend_row_selection_to_cursor`.
     pub fn toggle_row_selection(&mut self, row: usize) {
         if row >= self.total_rows() {
             return;
         }
-        if !self.selected_rows.insert(row) {
+        if self.selected_rows.insert(row) {
+            self.row_selection_anchor = Some(row);
+        } else {
             self.selected_rows.remove(&row);
         }
     }
 
-    /// Clear all full-row selections.
+    /// Select every row between the anchor (the last row selected with `x`) and
+    /// the cursor, inclusive. The range is added to the existing selection
+    /// (union). No-op when there is no anchor or no row is currently selected.
+    pub fn extend_row_selection_to_cursor(&mut self) {
+        if self.row_selection_anchor.is_none() || self.selected_rows.is_empty() {
+            return;
+        }
+        let anchor = self.row_selection_anchor.unwrap();
+        let cursor = self.cursor_row.min(self.total_rows().saturating_sub(1));
+        for row in anchor.min(cursor)..=anchor.max(cursor) {
+            self.selected_rows.insert(row);
+        }
+    }
+
+    /// Clear all full-row selections and the range-extension anchor.
     pub fn clear_row_selection(&mut self) {
         self.selected_rows.clear();
+        self.row_selection_anchor = None;
     }
 
     /// Whether the given row is selected as a full row.
@@ -257,7 +279,7 @@ impl ResultGrid {
                 self.deleted.insert(row);
             }
         }
-        self.selected_rows.clear();
+        self.clear_row_selection();
     }
 
     /// Copy the selected range in the requested format.
@@ -2046,6 +2068,63 @@ mod tests {
         grid.exit_visual_mode();
         assert!(grid.is_row_selected(0));
         assert!(!grid.is_cell_selected(0, 1));
+    }
+
+    /// A 5-row result for range-selection tests.
+    fn grid_with_rows(n: usize) -> ResultGrid {
+        let mut g = ResultGrid::new();
+        g.set_result(Some(QueryResult {
+            columns: vec![Column {
+                name: "v".into(),
+                type_name: "text".into(),
+            }],
+            rows: (0..n)
+                .map(|i| vec![CellValue::String(format!("r{i}"))])
+                .collect(),
+            rows_affected: None,
+        }));
+        g
+    }
+
+    #[test]
+    fn extend_row_selection_fills_range_to_cursor() {
+        let mut grid = grid_with_rows(5);
+        // Select row 1 -> becomes the anchor; move cursor to row 3 and extend.
+        grid.toggle_row_selection(1);
+        grid.cursor_row = 3;
+        grid.extend_row_selection_to_cursor();
+
+        assert!(grid.is_row_selected(1));
+        assert!(grid.is_row_selected(2));
+        assert!(grid.is_row_selected(3));
+        assert_eq!(grid.selected_row_count(), 3);
+    }
+
+    #[test]
+    fn extend_row_selection_unions_with_existing() {
+        let mut grid = grid_with_rows(5);
+        // Row 0 selected independently; then anchor row 1, extend to row 3.
+        grid.toggle_row_selection(0);
+        grid.toggle_row_selection(1);
+        grid.cursor_row = 3;
+        grid.extend_row_selection_to_cursor();
+
+        // The range 1..=3 is added; the pre-existing row 0 stays selected.
+        assert!(grid.is_row_selected(0));
+        assert!(grid.is_row_selected(1));
+        assert!(grid.is_row_selected(2));
+        assert!(grid.is_row_selected(3));
+        assert!(!grid.is_row_selected(4));
+        assert_eq!(grid.selected_row_count(), 4);
+    }
+
+    #[test]
+    fn extend_row_selection_without_anchor_is_noop() {
+        let mut grid = grid_with_rows(5);
+        // No row ever selected with `x` -> no anchor -> extend is a no-op.
+        grid.cursor_row = 4;
+        grid.extend_row_selection_to_cursor();
+        assert!(!grid.has_row_selection());
     }
 
     #[test]

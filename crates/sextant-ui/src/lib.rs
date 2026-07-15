@@ -1080,6 +1080,11 @@ impl App {
                     self.result_grid.toggle_row_selection(row);
                 }
             }
+            Action::ExtendRowSelection => {
+                if self.focus == Focus::Grid {
+                    self.result_grid.extend_row_selection_to_cursor();
+                }
+            }
         }
     }
 
