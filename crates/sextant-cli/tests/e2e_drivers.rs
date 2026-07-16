@@ -10,6 +10,9 @@
 //! sessions from running concurrently, which can destabilize timing-sensitive
 //! assertions.
 
+// Linux-only for the same PTY-flakiness reason as `e2e.rs`.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use std::time::Duration;

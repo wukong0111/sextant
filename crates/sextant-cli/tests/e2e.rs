@@ -4,6 +4,13 @@
 //! browser E2E suite: spawn the binary, send keystrokes, assert on the parsed
 //! screen, and cross-check the on-disk `state.db`.
 
+// The PTY harness (`portable_pty` + `vt100`) is only validated on Linux. PTY
+// behaviour and crossterm's escape-sequence decoding are platform-sensitive and
+// have shown flakes on macOS/Windows in similar harnesses (see bottom, which
+// gates the same way). Skipping these tests on other platforms is deliberate;
+// the rest of the workspace (`TestBackend` + unit tests) still runs everywhere.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use std::time::Duration;
@@ -557,5 +564,38 @@ fn connection_error_is_dismissable_with_esc() {
     assert!(
         tui.wait_exit(Duration::from_secs(10)),
         "sextant should exit"
+    );
+}
+
+/// `Tui::wait_for` must detect that the binary has exited and panic immediately
+/// (with a useful screen dump), instead of polling silently for the full
+/// timeout. This turns a 30s "timed out waiting for X" into a sub-second
+/// "process exited with status Y while waiting for X", which is far easier to
+/// debug when an assertion fails because the app crashed mid-flow.
+#[test]
+fn wait_for_detects_process_exit_quickly() {
+    let fx = Fixture::sqlite("e2e-early-exit");
+    let mut tui = fx.spawn();
+    tui.wait_for("e2e-early-exit", Duration::from_secs(10));
+
+    // Quit cleanly — no dirty buffers, so the app exits without prompting.
+    tui.send(CTRL_Q);
+
+    // Now ask for a needle that will never appear. Before early-exit detection
+    // this would poll for the full 30s timeout; with it, the next poll should
+    // observe the exited child and panic within a couple hundred ms.
+    let start = std::time::Instant::now();
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tui.wait_for("this needle will never appear", Duration::from_secs(30));
+    }));
+    let elapsed = start.elapsed();
+
+    assert!(
+        err.is_err(),
+        "wait_for should panic when the sextant process has exited"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "early-exit detection should panic within 3s, took {elapsed:?}"
     );
 }

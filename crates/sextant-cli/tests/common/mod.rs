@@ -165,9 +165,14 @@ impl Tui {
     }
 
     /// Poll the screen until it contains `needle`, or panic with a screen dump.
-    pub fn wait_for(&self, needle: &str, timeout: Duration) {
+    pub fn wait_for(&mut self, needle: &str, timeout: Duration) {
         let start = Instant::now();
         loop {
+            // If the child has already exited, the needle will never appear.
+            // Surface the exit immediately instead of waiting out `timeout` —
+            // a sub-second "process exited" panic is far easier to debug than
+            // a 30s "timed out waiting for X".
+            self.panic_if_exited(needle);
             let screen = self.screen();
             if screen.contains(needle) {
                 return;
@@ -182,9 +187,13 @@ impl Tui {
     }
 
     /// Poll the screen until `needle` is absent, or panic with a screen dump.
-    pub fn wait_for_absent(&self, needle: &str, timeout: Duration) {
+    pub fn wait_for_absent(&mut self, needle: &str, timeout: Duration) {
         let start = Instant::now();
         loop {
+            // Same rationale as `wait_for`: an exited child makes the needle
+            // trivially "absent", which would silently pass a test that
+            // actually crashed the app.
+            self.panic_if_exited(needle);
             let screen = self.screen();
             if !screen.contains(needle) {
                 return;
@@ -195,6 +204,27 @@ impl Tui {
                 );
             }
             std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Panic with a screen dump if the child process has exited. Called by the
+    /// polling waiters so a crash mid-flow is reported immediately rather than
+    /// after their full timeout.
+    fn panic_if_exited(&mut self, needle: &str) {
+        match self.child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                let screen = self.screen();
+                panic!(
+                    "sextant exited (status: {status}) while waiting for {needle:?}.\n--- screen ---\n{screen}\n--------------"
+                );
+            }
+            Err(e) => {
+                let screen = self.screen();
+                panic!(
+                    "error checking sextant status while waiting for {needle:?}: {e}\n--- screen ---\n{screen}\n--------------"
+                );
+            }
         }
     }
 

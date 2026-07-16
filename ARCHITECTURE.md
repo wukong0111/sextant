@@ -186,3 +186,9 @@ These are the things that bite you if you don't know them.
   are gated on `SEXTANT_TEST_PG_URL` / `SEXTANT_TEST_MYSQL_URL` and skip when
   unset. See `AGENTS.md` → Testing, and the `make test-db*` / `make seed*`
   targets.
+- **PTY end-to-end (`crates/sextant-cli/tests/{e2e,e2e_drivers,smoke}.rs`).**
+  These drive the real binary through `portable_pty` + `vt100`. They are
+  `#![cfg(target_os = "linux")]`-gated: PTY behaviour and crossterm's escape
+  decoding are platform-sensitive and have shown flakes on macOS/Windows in
+  similar harnesses. On non-Linux the test binaries are empty; the
+  `TestBackend` + unit suite still runs everywhere.

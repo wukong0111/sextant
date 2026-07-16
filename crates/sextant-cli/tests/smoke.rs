@@ -11,6 +11,9 @@
 //! Each test drives the binary to an interesting state and dumps the parsed
 //! screen to stderr, then quits.
 
+// Linux-only for the same PTY-flakiness reason as `e2e.rs`.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use std::time::Duration;
